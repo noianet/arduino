@@ -1,4 +1,6 @@
 /*
+GPL ref, based on https://github.com/majek/dump/blob/master/arduino/ard-01/geiger.pde
+
 Geiger counter details:
   Geiger interrupt 0 (pin D2 on arduino mini - see attachInterrupt). 
   Onboard led swap on/off on geiger read (13 on mini)
@@ -7,6 +9,8 @@ Geiger counter details:
   External 5 LED row indicator support (pin A0, A1 A2, A3, A4) - analog pins for tidyness since not used elsewhere,
   
   TODO: Store to large register and serial input code for dump.
+  
+
 */
 
 #include <LiquidCrystal.h>

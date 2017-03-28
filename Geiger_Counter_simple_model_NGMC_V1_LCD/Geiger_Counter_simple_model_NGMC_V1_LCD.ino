@@ -2,7 +2,7 @@
 Geiger counter details:
   Geiger interrupt 0 (pin D2 on arduino mini - see attachInterrupt). 
   Onboard led swap on/off on geiger read (13 on mini)
-  Serial output 115200. Indicates CPM, uSv og uSv average (floating average, 4 readings)
+  Serial output 115200. Indicates CPM, uSv og uSv average (floating average over 10 readings)
   LCD support (pin 3, 4, 5, 6, 7, 8)
   External 5 LED row indicator support (pin A0, A1 A2, A3, A4) - analog pins for tidyness since not used elsewhere,
   
@@ -37,6 +37,7 @@ unsigned long cpm;        //variable for CPM
 unsigned int multiplier;  //variable for calculation CPM in this sketch
 unsigned long previousMillis;  //variable for time measurement
 float usv_average=0.20;  //variable for uSv, starting with avg. 0.20
+float usv_average_old=0.20;  //variable for uSv last reading for LCD arrow, starting with avg. 0.20
 
 void setup(){  
   counts = 0;
@@ -71,25 +72,29 @@ void loop(){
     
     //const float conversion_factor
     float usv = (float)cpm / USV_CONVERSION;
-    usv_average=((usv_average*3+usv)/4);
+    usv_average=((usv_average*9+usv)/10);
     
     lcd.clear();    
     lcd.setCursor(0, 0);
-    lcd.print("CPM:");
-    lcd.setCursor(4,0);    //lcd.setCursor(9, 0);
+    if (cpm < 10){lcd.print(" ");} //add spaces to avoid jumping on 1, 10 digit numbers
+    if (cpm < 100){lcd.print(" ");}
+    if (cpm < 1000){lcd.print(" ");}
     lcd.print(cpm);
+    lcd.print("cpm");
     
     lcd.setCursor(8, 0);
-    lcd.print((char)228); //special char µ
-    lcd.print("Sv:");
-    lcd.setCursor(12,0);
     lcd.print(usv,2);
+    lcd.print((char)228); //special char µ
+    lcd.print("Sv");    
     
     lcd.setCursor(0,1);
-    lcd.print(usv_average,4);
-    lcd.setCursor(7,1);
+    if (usv_average > usv_average_old) {lcd.print((char)126);} //special char, right arrow (rom missing up)
+    else if (usv_average < usv_average_old) {lcd.print((char)127);} //special char, left arrow (rom missing down)
+    else {lcd.print(" ");} //no change, space only
+    lcd.print(usv_average,3);
     lcd.print((char)228); //special char µ
     lcd.print("Sv/h avg");
+    usv_average_old=usv_average; //update with last reading
     
     //led array 
     if(cpm <= TH1) ledVar(0);
@@ -100,6 +105,9 @@ void loop(){
     if(cpm>TH5) ledVar(5);
     
     Serial.print("cpm: ");
+    if (cpm < 10) {Serial.print(" ");} //adds extra space if single digit to clean up formatting
+    //if (cpm < 100) {Serial.print(" ");} //adds extra space if single digit to clean up formatting
+    //if (cpm < 1000) {Serial.print(" ");} //adds extra space if single digit to clean up formatting
     Serial.print(cpm);
     Serial.print(" uSv/h: ");
     Serial.print(usv);

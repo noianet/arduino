@@ -6,11 +6,9 @@ Geiger counter details:
   Onboard led swap on/off on geiger read (13 on mini)
   Serial output 115200. Indicates CPM, uSv og uSv average (floating average over 10 readings)
   LCD support (pin 3, 4, 5, 6, 7, 8)
-  External 5 LED row indicator support (pin A0, A1 A2, A3, A4) - analog pins for tidyness since not used elsewhere,
+  External 5 LED row indicator support (pin A0, A1 A2, A3, A4) - analog pins for led fade effect, and not used elsewhere
   
-  TODO: Store to large register and serial input code for dump.
-  
-
+  TODO: Store CPM to large register/stack and serial input command for datadump. Include some LCD display update "download mode" for example).
 */
 
 #include <LiquidCrystal.h>
@@ -55,7 +53,7 @@ void setup(){
   lcd.clear();
   lcd.setCursor(0, 0);
   lcd.print("Radiation Sensor");
-  lcd.setCursor(0,1);
+  lcd.setCursor(2,1);
   lcd.print("Please wait"); 
 
    //flash onboard led to indicate setup done
@@ -133,6 +131,40 @@ void ledVar(int value){  //function for 5x LED row update
   else {
     for(int i=5;i>=0;i--){
       digitalWrite(ledArray[i],LOW);
+    }
+  }
+}
+
+void ledFade(int value){  //function for 5x LED row update with fading effect
+  if (value > 0){
+    for(int i=0;i<=value;i++){
+      // fade in from min to max in increments of 5 points:
+      for (int fadeValue = 0 ; fadeValue <= 255; fadeValue += 5) {
+        // sets the value (range from 0 to 255):
+        analogWrite(ledArray[i], fadeValue);
+        // wait for 30 milliseconds to see the dimming effect
+       delay(30);
+      }
+    }
+    for(int i=5;i>value;i--){
+      // fade out from max to min in increments of 5 points:
+      for (int fadeValue = 255 ; fadeValue >= 0; fadeValue -= 5) {
+        // sets the value (range from 0 to 255):
+        analogWrite(ledArray[i], fadeValue);
+        // wait for 30 milliseconds to see the dimming effect
+        delay(30);
+      }
+    }
+  } 
+  else {
+    for(int i=5;i>=0;i--){
+      // fade out from max to min in increments of 5 points:
+      for (int fadeValue = 255 ; fadeValue >= 0; fadeValue -= 5) {
+        // sets the value (range from 0 to 255):
+        analogWrite(ledArray[i], fadeValue);
+        // wait for 30 milliseconds to see the dimming effect
+        delay(30);
+      }
     }
   }
 }

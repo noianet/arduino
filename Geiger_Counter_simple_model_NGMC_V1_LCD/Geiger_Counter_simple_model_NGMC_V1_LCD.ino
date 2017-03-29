@@ -4,14 +4,17 @@ GPL ref, based on https://github.com/majek/dump/blob/master/arduino/ard-01/geige
 Geiger counter details:
   Geiger interrupt 0 (pin D2 on arduino mini - see attachInterrupt). 
   Onboard led swap on/off on geiger read (13 on mini)
-  Serial output 115200. Indicates CPM, uSv og uSv average (floating average over 10 readings)
-  Softserial for bluetooth mobile reporting, app  "Bluetooth terminal/Graphics" by Emerican CETIN. Uses pin 11=RX, 12=TX (RX not in use for now)
+  Serial USB output 115200. Indicates CPM, µSv og µSv average (floating average over 10 readings)
+     Example output: cpm: 20 uSv/h: 0.16 uSv/h avg: 0.17
+  Softserial for bluetooth mobile reporting. Adapted for app  "Bluetooth Terminal/Graphics" by Emrecan ÇETİN. Uses pin 11=RX, 12=TX (RX not in use for now)
      Format required by app:  Evalue1,value2,value3...\n. Data sent are: Ecpm,usv,usv_average\n
      Using HC-06 bt device, usually pairing passcode is 1234.
-  LCD support (pin 3, 4, 5, 6, 7, 8)
-  External 5 LED row indicator support (pin A0, A1 A2, A3, A4) - analog pins for led fade effect, and not used elsewhere
+  LCD support (pin 3,4,5,6,7,8)
+  External 5 LED row indicator support (pin A0,A1,A2,A3,A4). Separate funtion for led fade effect.
   
   TODO: Store CPM to large register/stack and serial input command for datadump. Include some LCD display update "download mode" for example).
+  TODO: Buttons to do some stuff?
+  TODO: rad accumulator calculation and a "run away" warning?
 */
 
 #include <LiquidCrystal.h>
@@ -20,7 +23,7 @@ Geiger counter details:
 LiquidCrystal lcd(3,4,5,6,7,8);
 SoftwareSerial btSerial(11, 12); // RX, TX
 
-#define LOG_PERIOD 30000  //Logging period in milliseconds, recommended value 15000-60000.
+#define LOG_PERIOD 30000  //Logging period in milliseconds, recommended value 15000-60000. NB: correct usv_accumulated calculation if changed
 #define MAX_PERIOD 60000  //Maximum logging period without modifying this sketch
 
 #define USV_CONVERSION 123.147092360319  //conversion factor for J305 tube. Factor: 0.00812037037037
@@ -45,6 +48,8 @@ unsigned int multiplier;  //variable for calculation CPM in this sketch
 unsigned long previousMillis;  //variable for time measurement
 float usv_average=0.20;  //variable for uSv, starting with avg. 0.20
 float usv_average_old=0.20;  //variable for uSv last reading for LCD arrow, starting with avg. 0.20
+float usv_accumulated=0;  //variable.for accumulated since boot/reset
+boolean lcd_mode=1; //used to swap LCD info
 
 void setup(){  
   counts = 0;
@@ -81,21 +86,28 @@ void loop(){
     //const float conversion_factor
     float usv = (float)cpm / USV_CONVERSION;
     usv_average=((usv_average*9+usv)/10);
+    usv_accumulated=usv_accumulated+(usv/2)/60;//accumulated since boot/reset
     
     lcd.clear();    
     lcd.setCursor(0, 0);
-    if (cpm < 10){lcd.print(" ");} //add spaces to avoid jumping on 1, 10 digit numbers
-    if (cpm < 100){lcd.print(" ");}
-    if (cpm < 1000){lcd.print(" ");}
-    lcd.print(cpm);
-    lcd.print("cpm");
-    
-    lcd.setCursor(8, 0);
-    lcd.print(usv,2);
-    lcd.print((char)228); //special char µ
-    lcd.print("Sv");    
-    
-    lcd.setCursor(0,1);
+    if (lcd_mode) { //swaps between two LCD infos on first line
+      if (cpm < 10){lcd.print(" ");} //add spaces to avoid jumping on 1, 10 digit numbers
+      if (cpm < 100){lcd.print(" ");}
+      if (cpm < 1000){lcd.print(" ");}
+      lcd.print(cpm);
+      lcd.print("cpm");
+      lcd.setCursor(8, 0);
+      lcd.print(usv,2);
+      lcd.print((char)228); //special char µ
+      lcd.print("Sv");    
+      lcd_mode=0;
+    } else {
+      lcd.print((char)228); //special char µ
+      lcd.print("Sv acc: ");
+      lcd.print(usv_accumulated);
+      lcd_mode=1;
+    }
+    lcd.setCursor(0,1); //second line
     if (usv_average > usv_average_old) {lcd.print((char)126);} //special char, right arrow (rom missing up)
     else if (usv_average < usv_average_old) {lcd.print((char)127);} //special char, left arrow (rom missing down)
     else {lcd.print(" ");} //no change, space only
@@ -121,7 +133,9 @@ void loop(){
     Serial.print(" uSv/h: ");
     Serial.print(usv);
     Serial.print(" uSv/h avg: ");
-    Serial.println(usv_average);
+    Serial.print(usv_average);
+    Serial.print(" uSv/h acc: ");
+    Serial.println(usv_accumulated,4);
     
     //Bluetooth softserial 
     btSerial.print("E");
@@ -152,15 +166,15 @@ void ledVar(int value){  //function for 5x LED row update
   }
 }
 
-void ledFade(int value){  //function for 5x LED row update with fading effect
+void ledFade(int value, int d = 0){  //function for 5x LED row update with fading effect, d for delay which defaults to 0
   if (value > 0){
     for(int i=0;i<=value;i++){
       // fade in from min to max in increments of 5 points:
       for (int fadeValue = 0 ; fadeValue <= 255; fadeValue += 5) {
         // sets the value (range from 0 to 255):
         analogWrite(ledArray[i], fadeValue);
-        // wait for 30 milliseconds to see the dimming effect
-       delay(30);
+        // wait for d milliseconds to see the dimming effect
+       delay(d);
       }
     }
     for(int i=5;i>value;i--){
@@ -168,8 +182,8 @@ void ledFade(int value){  //function for 5x LED row update with fading effect
       for (int fadeValue = 255 ; fadeValue >= 0; fadeValue -= 5) {
         // sets the value (range from 0 to 255):
         analogWrite(ledArray[i], fadeValue);
-        // wait for 30 milliseconds to see the dimming effect
-        delay(30);
+        // wait for d milliseconds to see the dimming effect
+        delay(d);
       }
     }
   } 
@@ -179,8 +193,8 @@ void ledFade(int value){  //function for 5x LED row update with fading effect
       for (int fadeValue = 255 ; fadeValue >= 0; fadeValue -= 5) {
         // sets the value (range from 0 to 255):
         analogWrite(ledArray[i], fadeValue);
-        // wait for 30 milliseconds to see the dimming effect
-        delay(30);
+        // wait for d milliseconds to see the dimming effect
+        delay(d);
       }
     }
   }

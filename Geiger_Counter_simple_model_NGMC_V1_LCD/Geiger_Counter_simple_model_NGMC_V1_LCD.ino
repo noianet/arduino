@@ -5,6 +5,9 @@ Geiger counter details:
   Geiger interrupt 0 (pin D2 on arduino mini - see attachInterrupt). 
   Onboard led swap on/off on geiger read (13 on mini)
   Serial output 115200. Indicates CPM, uSv og uSv average (floating average over 10 readings)
+  Softserial for bluetooth mobile reporting, app  "Bluetooth terminal/Graphics" by Emerican CETIN. Uses pin 11=RX, 12=TX (RX not in use for now)
+     Format required by app:  Evalue1,value2,value3...\n. Data sent are: Ecpm,usv,usv_average\n
+     Using HC-06 bt device, usually pairing passcode is 1234.
   LCD support (pin 3, 4, 5, 6, 7, 8)
   External 5 LED row indicator support (pin A0, A1 A2, A3, A4) - analog pins for led fade effect, and not used elsewhere
   
@@ -12,10 +15,12 @@ Geiger counter details:
 */
 
 #include <LiquidCrystal.h>
+#include <SoftwareSerial.h>
 // initialize the library with the numbers of the interface pins
 LiquidCrystal lcd(3,4,5,6,7,8);
+SoftwareSerial btSerial(11, 12); // RX, TX
 
-#define LOG_PERIOD 15000  //Logging period in milliseconds, recommended value 15000-60000.
+#define LOG_PERIOD 30000  //Logging period in milliseconds, recommended value 15000-60000.
 #define MAX_PERIOD 60000  //Maximum logging period without modifying this sketch
 
 #define USV_CONVERSION 123.147092360319  //conversion factor for J305 tube. Factor: 0.00812037037037
@@ -46,6 +51,7 @@ void setup(){
   cpm = 0;
   multiplier = MAX_PERIOD / LOG_PERIOD;      //calculating multiplier, depend on your log period
   Serial.begin(115200);
+  btSerial.begin(9600);
   attachInterrupt(0, tube_impulse, FALLING);   //define external interrupt 0
   
   //set up the LCD\'s number of columns and rows:
@@ -106,6 +112,7 @@ void loop(){
     if((cpm <= TH5)&&(cpm>TH4)) ledVar(4);
     if(cpm>TH5) ledVar(5);
     
+    //USB serial
     Serial.print("cpm: ");
     if (cpm < 10) {Serial.print(" ");} //adds extra space if single digit to clean up formatting
     //if (cpm < 100) {Serial.print(" ");} //adds extra space if single digit to clean up formatting
@@ -115,6 +122,16 @@ void loop(){
     Serial.print(usv);
     Serial.print(" uSv/h avg: ");
     Serial.println(usv_average);
+    
+    //Bluetooth softserial 
+    btSerial.print("E");
+    btSerial.print(cpm);
+    btSerial.print(",");
+    btSerial.print(usv);
+    btSerial.print(",");
+    btSerial.print(usv_average);
+    btSerial.print("\n");
+    
     counts = 0;
   }
 }

@@ -2,12 +2,15 @@
   pneumatic testjig with statemachine. 
   
   Remember to short emergency pin to ground to run actuator (internal pullup)
+  
+  TODO: adapt input to distance sensor when have access to hardware. Only analog read for now.
 */
 #include <Servo.h>
 #define LOG_PERIOD 1000  //Serial output logging period in milliseconds.
 
 //PIN declarations:
-#define EMERGENCYPIN 3 //internal pullup enabled
+#define EMERGENCYPIN 3 //internal pullup enabled, for emercency button (N/O button). Short to ground for normal operation.
+#define BLEEDPIN 4 //internal pullup enabled, for switch. Only checked if emergency NOT shorted to ground. 
 #define ESERVOPINFILL 6 //extend servo1
 #define ESERVOPINFLUSH 7 //extend servo1 
 #define RSERVOPINFILL 8 //retract servo1
@@ -22,6 +25,7 @@
 #define MINLENGTH 100 //min stroke distance in mm
 #define SERVOSTARTPOS 30 //zero position for valve servos. Physical adjust almost open in this position.NB: emergency set this at -10
 #define SERVORANGE 130 //max movement above startpos (added from startpos)
+#define BLEEDANGLE 10 //servo angle for bleed actuator, higher for quicker pressure release
 #define MINIMUMPRESSURE 100 //ideal working pressure. This factor will control energy efficiency (too much or too little venting) and somewhat speed,
 #define HYSTERISIS 10 //hysterisis for position adjust. Larger value -> less small adjustments -> less power loss
 
@@ -54,8 +58,9 @@ void setup()
   rservoflush.attach(RSERVOPINFLUSH); 
   stopactuator(); //sets all servos to closed position
 
-  //enable pullup for emergency read. Short to ground to run actuator
+  //enable pullup for emergency read and bleed switch. Short emergency to ground to run actuator.
   pinMode(EMERGENCYPIN, INPUT_PULLUP);
+  pinMode(BLEEDPIN, INPUT_PULLUP); 
   
   //flash onboard led to indicate setup done
   pinMode(13, OUTPUT);
@@ -73,8 +78,12 @@ void loop()
   
   //check if emergency, pull to ground for actuator run (internal pullup enabled)
  if (!digitalRead(EMERGENCYPIN)) { //if emergency pin NOT shorted to ground run stopactuator. Pin has enabled internal pullup.
-    stopactuator(); //close all valves
-  } else {
+    if (!digitalRead(BLEEDPIN)) { 
+      stopactuator(); //only close all valves if bleedpin still shorted to ground
+    } else {
+      bleedactuator(); //close input valves and eject chambers if EMERGENCYPIN and BLEEDPIN NOT shorted to ground.
+    }
+  } else { //normal operation
     runactuator(); //run PID statemachine.
   }
   
@@ -103,8 +112,8 @@ void runactuator() { //simple statemachine, operates by calls to position reads 
 
   //read some sensor values
   havepos=analogRead(DISTANCEPIN); //read distance. TODO adapt to sensor. potmeter for test
-  extendpressure=analogRead(EPNEUMATICPIN);
-  retractpressure=analogRead(RPNEUMATICPIN);
+  extendpressure=analogRead(EPNEUMATICPIN); //pressure on extend line
+  retractpressure=analogRead(RPNEUMATICPIN); //pressure on retract line
 
   // Try to hold position and a MINIMUMPRESSURE (to not vent down to atmosphere). 
   // if position requires pressure below MINIMUMPRESSURE, hold valves closed (opposite direction will compensate)
@@ -143,6 +152,13 @@ void stopactuator() { //sets all servos to a bit beyond closed position. startpo
   rservoflush.write(SERVOSTARTPOS-10);
 }
 
+void bleedactuator() { //slowly release pressure based on input (for shutdown)
+  Serial.println("DEBUG: Bleedactuator, input valves set -10 from startpos and flush open");
+  eservofill.write(SERVOSTARTPOS-10); 
+  eservoflush.write(SERVOSTARTPOS+BLEEDANGLE);
+  rservofill.write(SERVOSTARTPOS-10); 
+  rservoflush.write(SERVOSTARTPOS+BLEEDANGLE);
+}
 
 /*
   SerialEvent occurs whenever a new data comes in the

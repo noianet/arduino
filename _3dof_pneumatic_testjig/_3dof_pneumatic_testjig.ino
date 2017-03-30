@@ -23,6 +23,7 @@
 #define SERVOSTARTPOS 30 //zero position for valve servos. Physical adjust almost open in this position.NB: emergency set this at -10
 #define SERVORANGE 130 //max movement above startpos (added from startpos)
 #define MINIMUMPRESSURE 100 //ideal working pressure. This factor will control energy efficiency (too much or too little venting) and somewhat speed,
+#define HYSTERISIS 10 //hysterisis for position adjust. Larger value -> less small adjustments -> less power loss
 
 #define SERIALSPEED 115200
 
@@ -108,7 +109,7 @@ void runactuator() { //simple statemachine, operates by calls to position reads 
   // Try to hold position and a MINIMUMPRESSURE (to not vent down to atmosphere). 
   // if position requires pressure below MINIMUMPRESSURE, hold valves closed (opposite direction will compensate)
   
-  if (havepos < wantpos) { //need to extend
+  if ((havepos+HYSTERISIS) < wantpos) { //need to extend
     rservofill.write(SERVOSTARTPOS); //close input on retract line
     eservoflush.write(SERVOSTARTPOS); //close flush on extend line
     eservofill.write(SERVOSTARTPOS+movespeed); //open fill on extend line
@@ -117,7 +118,7 @@ void runactuator() { //simple statemachine, operates by calls to position reads 
      } else {
       rservoflush.write(SERVOSTARTPOS); 
      }  
-  } else if (havepos > wantpos) { //need to retract
+  } else if ((havepos-HYSTERISIS) > wantpos) { //need to retract
     eservofill.write(SERVOSTARTPOS); //close input on extend line
     rservoflush.write(SERVOSTARTPOS); //close flush on retract line
     rservofill.write(SERVOSTARTPOS+movespeed); //open fill on retract line

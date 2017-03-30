@@ -16,7 +16,6 @@ Geiger counter details:
   TODO: Buttons to do some stuff?
   TODO: rad accumulator calculation and a "run away" warning?
 */
-
 #include <LiquidCrystal.h>
 #include <SoftwareSerial.h>
 // initialize the library with the numbers of the interface pins
@@ -102,6 +101,7 @@ void loop(){
       lcd.print("Sv");    
       lcd_mode=0;
     } else {
+      lcd.print(" ");    
       lcd.print((char)228); //special char µ
       lcd.print("Sv acc: ");
       lcd.print(usv_accumulated);

@@ -9,8 +9,8 @@
 #define LOG_PERIOD 1000  //Serial output logging period in milliseconds.
 
 //PIN declarations:
-#define EMERGENCYPIN 3 //internal pullup enabled, for emercency button (N/O button). Short to ground for normal operation.
-#define BLEEDPIN 4 //internal pullup enabled, for switch. Only checked if emergency NOT shorted to ground. 
+#define EMERGENCYPIN 2 //internal pullup enabled, for emercency button (N/O button). Short to ground for normal operation.
+#define BLEEDPIN 3 //internal pullup enabled, for switch. Only checked if emergency NOT shorted to ground. 
 #define ESERVOPINFILL 6 //extend servo1
 #define ESERVOPINFLUSH 7 //extend servo1 
 #define RSERVOPINFILL 8 //retract servo1
@@ -46,6 +46,7 @@ int movespeed=10;  //adjusted by serial input. Sets valve opening factor (servo 
 int havepos=analogRead(DISTANCEPIN); //read distance. TODO adapt to sensor. potmeter for test
 int extendpressure=analogRead(EPNEUMATICPIN);
 int retractpressure=analogRead(RPNEUMATICPIN);
+int counter=0; //for benchmark
 
 void setup()
 {
@@ -77,11 +78,11 @@ void loop()
   wantpos = map(analogRead(POTMETERPIN), 0, 1023, MINLENGTH, MAXLENGTH); // scale to stroke length
   
   //check if emergency, pull to ground for actuator run (internal pullup enabled)
- if (!digitalRead(EMERGENCYPIN)) { //if emergency pin NOT shorted to ground run stopactuator. Pin has enabled internal pullup.
-    if (!digitalRead(BLEEDPIN)) { 
-      stopactuator(); //only close all valves if bleedpin still shorted to ground
+ if (digitalRead(EMERGENCYPIN)) { //if emergency pin NOT shorted to ground run stopactuator. Pin has enabled internal pullup.
+    if (digitalRead(BLEEDPIN)) { 
+     bleedactuator(); //close input valves and eject chambers if EMERGENCYPIN and BLEEDPIN NOT shorted to ground.
     } else {
-      bleedactuator(); //close input valves and eject chambers if EMERGENCYPIN and BLEEDPIN NOT shorted to ground.
+      stopactuator(); //only close all valves if bleedpin still shorted to ground
     }
   } else { //normal operation
     runactuator(); //run PID statemachine.
@@ -92,17 +93,21 @@ void loop()
   unsigned long currentMillis = millis();
   if(currentMillis - previousMillis > LOG_PERIOD){
     previousMillis = currentMillis;
-    Serial.print("DEBUG: speed: ");
+    Serial.print("bm:: ");
+    Serial.print(counter);
+    Serial.print(" speed: ");
     Serial.print(movespeed);
-    Serial.print(" epresssure: ");
+    Serial.print(" epresss: ");
     Serial.print(extendpressure);
-    Serial.print(" rpresssure: ");
+    Serial.print(" rpresss: ");
     Serial.print(retractpressure);
     Serial.print(" wantpos: ");
     Serial.println(wantpos);
     Serial.print(" havepos: ");
     Serial.println(havepos);
+    counter=0;
   }
+  counter++;
 } 
 //----------------------------------------END INIT/SETUP/LOOP, utility functions below-----------------------------------------------------
 
@@ -145,19 +150,21 @@ void runactuator() { //simple statemachine, operates by calls to position reads 
 } //end statemachine
 
 void stopactuator() { //sets all servos to a bit beyond closed position. startpos is just before opening.
-  Serial.println("DEBUG: Stopactuator, all valves set -10 from startpos");
+  Serial.println("Stopactuator, all valves set -10 from startpos");
   eservofill.write(SERVOSTARTPOS-10); 
   eservoflush.write(SERVOSTARTPOS-10);
   rservofill.write(SERVOSTARTPOS-10); 
   rservoflush.write(SERVOSTARTPOS-10);
+  delay(1000); //to avoid serial spam
 }
 
 void bleedactuator() { //slowly release pressure based on input (for shutdown)
-  Serial.println("DEBUG: Bleedactuator, input valves set -10 from startpos and flush open");
+  Serial.println("Bleedactuator, input valves set -10 from startpos and flush open");
   eservofill.write(SERVOSTARTPOS-10); 
   eservoflush.write(SERVOSTARTPOS+BLEEDANGLE);
   rservofill.write(SERVOSTARTPOS-10); 
   rservoflush.write(SERVOSTARTPOS+BLEEDANGLE);
+  delay(1000); //to avoid serial spam
 }
 
 /*

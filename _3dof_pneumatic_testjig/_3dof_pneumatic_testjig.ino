@@ -26,7 +26,9 @@
 #define SERVOSTARTPOS 30 //zero position for valve servos. Physical adjust almost open in this position.NB: emergency set this at -10
 #define SERVORANGE 130 //max movement above startpos (added from startpos)
 #define BLEEDANGLE 10 //servo angle for bleed actuator, higher for quicker pressure release
-#define MINIMUMPRESSURE 100 //ideal working pressure. This factor will control energy efficiency (too much or too little venting) and somewhat speed,
+
+//Pneumatics relate. This factor will control energy efficiency (too much or too little venting) and somewhat speed,
+#define MINIMUMPRESSURE 100 //ideal working pressure. Atmospheric about 100 on test sensor.
 #define HYSTERISIS 10 //hysterisis for position adjust. Larger value -> less small adjustments -> less power loss
 
 #define SERIALSPEED 115200
@@ -102,7 +104,7 @@ void loop()
     Serial.print(" rpresss: ");
     Serial.print(retractpressure);
     Serial.print(" wantpos: ");
-    Serial.println(wantpos);
+    Serial.print(wantpos);
     Serial.print(" havepos: ");
     Serial.println(havepos);
     counter=0;

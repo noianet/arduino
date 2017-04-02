@@ -21,8 +21,8 @@
 #define POTMETERPIN A6 //for manual position adjust
 
 //Physical definitions:
-#define MAXLENGTH 1000 //max stroke distance in mm
-#define MINLENGTH 100 //min stroke distance in mm
+#define MINLENGTH 100 //min stroke position in mm. Is used as zero point. Related to position sensor positioning.
+#define STROKELENGTH 1000 //max stroke length in mm from MINLENGTH
 #define SERVOSTARTPOS 30 //zero position for valve servos. Physical adjust almost open in this position.NB: emergency set this at -10
 #define SERVORANGE 130 //max movement above startpos (added from startpos)
 #define BLEEDANGLE 10 //servo angle for bleed actuator, higher for quicker pressure release
@@ -76,8 +76,10 @@ void setup()
 
 void loop() 
 { 
+  unsigned long currentMillis = millis(); //time concept
+  
   //read potmeter, translate to want position (adjust speed via serial - obs for required wantpos)
-  wantpos = map(analogRead(POTMETERPIN), 0, 1023, MINLENGTH, MAXLENGTH); // scale to stroke length
+  wantpos = map(analogRead(POTMETERPIN), 0, 1023, 0, STROKELENGTH); // scale to stroke length
   
   //check if emergency, pull to ground for actuator run (internal pullup enabled)
  if (digitalRead(EMERGENCYPIN)) { //if emergency pin NOT shorted to ground run stopactuator. Pin has enabled internal pullup.
@@ -88,28 +90,26 @@ void loop()
     }
   } else { //normal operation
     runactuator(); //run PID statemachine.
+
+    //Serial output every LOG_PERIOD milliseconds
+    if(currentMillis - previousMillis > LOG_PERIOD){
+      previousMillis = currentMillis;
+      Serial.print("bm:: ");
+      Serial.print(counter);
+      Serial.print(" speed: ");
+      Serial.print(movespeed);
+      Serial.print(" epresss: ");
+      Serial.print(extendpressure);
+      Serial.print(" rpresss: ");
+      Serial.print(retractpressure);
+      Serial.print(" wantpos: ");
+      Serial.print(wantpos);
+      Serial.print(" havepos: ");
+      Serial.println(havepos);
+      counter=0;
+    }
+    counter++;
   }
-  
-  
-  //Serial output every LOG_PERIOD milliseconds
-  unsigned long currentMillis = millis();
-  if(currentMillis - previousMillis > LOG_PERIOD){
-    previousMillis = currentMillis;
-    Serial.print("bm:: ");
-    Serial.print(counter);
-    Serial.print(" speed: ");
-    Serial.print(movespeed);
-    Serial.print(" epresss: ");
-    Serial.print(extendpressure);
-    Serial.print(" rpresss: ");
-    Serial.print(retractpressure);
-    Serial.print(" wantpos: ");
-    Serial.print(wantpos);
-    Serial.print(" havepos: ");
-    Serial.println(havepos);
-    counter=0;
-  }
-  counter++;
 } 
 //----------------------------------------END INIT/SETUP/LOOP, utility functions below-----------------------------------------------------
 
@@ -118,14 +118,15 @@ void runactuator() { //simple statemachine, operates by calls to position reads 
   if (movespeed > SERVORANGE) {movespeed=SERVORANGE;}
 
   //read some sensor values
-  havepos=analogRead(DISTANCEPIN); //read distance. TODO adapt to sensor. potmeter for test
+  havepos=analogRead(DISTANCEPIN)-MINLENGTH; //read distance, adjusted for defined minimum length to set zero point. TODO adapt to laser sensor.
+  //if (havepos < 0) {havepos=0;} //should avoid negative position calculation? commented out for now.
   extendpressure=analogRead(EPNEUMATICPIN); //pressure on extend line
   retractpressure=analogRead(RPNEUMATICPIN); //pressure on retract line
 
   // Try to hold position and a MINIMUMPRESSURE (to not vent down to atmosphere). 
   // if position requires pressure below MINIMUMPRESSURE, hold valves closed (opposite direction will compensate)
   
-  if ((havepos+HYSTERISIS) < wantpos) { //need to extend
+  if (((havepos+HYSTERISIS) < wantpos) && (havepos < STROKELENGTH)) { //need to extend. Check to avoid beyond max set by STROKELENGTH
     rservofill.write(SERVOSTARTPOS); //close input on retract line
     eservoflush.write(SERVOSTARTPOS); //close flush on extend line
     eservofill.write(SERVOSTARTPOS+movespeed); //open fill on extend line
@@ -134,7 +135,7 @@ void runactuator() { //simple statemachine, operates by calls to position reads 
      } else {
       rservoflush.write(SERVOSTARTPOS); 
      }  
-  } else if ((havepos-HYSTERISIS) > wantpos) { //need to retract
+  } else if (((havepos-HYSTERISIS) > wantpos) && (havepos > 0)) { //need to retract, check to avoid going below zero point defined by MINLENGTH
     eservofill.write(SERVOSTARTPOS); //close input on extend line
     rservoflush.write(SERVOSTARTPOS); //close flush on retract line
     rservofill.write(SERVOSTARTPOS+movespeed); //open fill on retract line
@@ -152,7 +153,7 @@ void runactuator() { //simple statemachine, operates by calls to position reads 
 } //end statemachine
 
 void stopactuator() { //sets all servos to a bit beyond closed position. startpos is just before opening.
-  Serial.println("Stopactuator, all valves set -10 from startpos");
+  Serial.println("Stopactuator, all valves set -10 from startpos. Script delay 1s");
   eservofill.write(SERVOSTARTPOS-10); 
   eservoflush.write(SERVOSTARTPOS-10);
   rservofill.write(SERVOSTARTPOS-10); 
@@ -161,7 +162,7 @@ void stopactuator() { //sets all servos to a bit beyond closed position. startpo
 }
 
 void bleedactuator() { //slowly release pressure based on input (for shutdown)
-  Serial.println("Bleedactuator, input valves set -10 from startpos and flush open");
+  Serial.println("Bleedactuator, input valves set -10 from startpos and flush open. Script delay 1s");
   eservofill.write(SERVOSTARTPOS-10); 
   eservoflush.write(SERVOSTARTPOS+BLEEDANGLE);
   rservofill.write(SERVOSTARTPOS-10); 
@@ -186,5 +187,10 @@ void serialEvent() {
       Serial.print(",");
       Serial.println(movespeed);
     }
+    //sanitycheck on input:
+    if (wantpos > (STROKELENGTH)) {wantpos=STROKELENGTH;} //asked for position beyond max (also rechecked in runactuator() )
+    if (wantpos < 0) {wantpos=0;} //asked for negative position
+    if (movespeed > SERVORANGE) {movespeed=SERVORANGE;} //asked for speed beyond max (also rechecked in runactuator() )
+    if (movespeed < 0) {wantpos=0;} //asked for negative speed
   }
 }

@@ -1,10 +1,33 @@
 /* 
-  pneumatic testjig with statemachine. 
+  Pneumatic testjig with statemachine. 
+  Overview hardware:
+      4x servos, 4x valves , 2x pressure sensors, 1x VL53L0X lidar. Single pneumatic cylinder.
+      lidar lib doc: https://github.com/pololu/vl53l0x-arduino
   
-  Remember to short emergency pin to ground to run actuator (internal pullup)
+  State machine logic:
+    loop():
+        Emergencypin, flush, and potmeter for manual control. Check for emergency/bleed switch.
+        Potmeter pin ignored if 0 (ground pin for serial only), will override serial input if not..
+        Normal mode jumps to runactuator() function.
+    runactuator() function:
+       Will run only if emergencypin pulled to ground, and for every loop read pressure and distance sensors, and compare with requested position, 
+       Will bleed chambers if necessary down to MINIMUMPRESSURE, and fill oposite chamber with what is necessary to reach its position. HYSTERISIS sets acceptable variation before running valves.
+       "movespeed" variable adjusts valve opening angle from SERVOSTARTPOS, and can be controlled via serial input. Hard coced SERVORANGE for max opening angle from SERVOSTARTPOS.
+       "wantpos" variable used for requested position. Can be controlled via POTMETERPIN (or if analogRead commented out in loop() directly via serial),
+       No delays, millis used for serial output every LOG_PERIOD ms. Initial benchmarking on an Arduino nano gives 1300 loops/sec.
+    stopactuator() function: 
+        Will run if emergencypin not pulled to ground. Sets all servos to -20 deg. Delay 1000ms with serial prompt,
+    bleedactuator() function:
+        Will only run if emergencypin and bleedswitch not pulled to ground. Sets all input servos to -20 deg and flush to defined BLEEDANGLE (10). Delay 1000ms with serial prompt,
+  General IO:
+      Serial input on interrupt, valid input are distance,speed ex 200,30. Routine does input validation basend on constants.
   
-  TODO: adapt input to distance sensor when have access to hardware. Only analog read for now.
+  
+  Remember to short emergency pin to ground to run actuator (internal pullup).
+  Serial set at 115200.
 */
+#include <Wire.h>
+#include <VL53L0X.h>
 #include <Servo.h>
 #define LOG_PERIOD 1000  //Serial output logging period in milliseconds.
 
@@ -15,23 +38,21 @@
 #define ESERVOPINFLUSH 7 //extend servo1 
 #define RSERVOPINFILL 8 //retract servo1
 #define RSERVOPINFLUSH 9 //retract servo1 
-#define DISTANCEPIN A0 //distance sensor
 #define EPNEUMATICPIN A1 //pneumatic sensor extend line
 #define RPNEUMATICPIN A2 //pneumatic sensor retract line
-#define POTMETERPIN A6 //for manual position adjust
+#define POTMETERPIN A3 //for manual position adjust
+//lidar connected to I2C bus at A4 (SDA) and A5 (SCL)
 
 //Physical definitions:
 #define MINLENGTH 100 //min stroke position in mm. Is used as zero point. Related to position sensor positioning.
-#define STROKELENGTH 1000 //max stroke length in mm from MINLENGTH
+#define STROKELENGTH 2000 //max stroke length in mm from MINLENGTH
 #define SERVOSTARTPOS 30 //zero position for valve servos. Physical adjust almost open in this position.NB: emergency set this at -10
-#define SERVORANGE 130 //max movement above startpos (added from startpos)
+#define SERVORANGE 60 //max movement above startpos (added from startpos)
 #define BLEEDANGLE 10 //servo angle for bleed actuator, higher for quicker pressure release
 
 //Pneumatics relate. This factor will control energy efficiency (too much or too little venting) and somewhat speed,
-#define MINIMUMPRESSURE 200 //ideal working pressure. Atmospheric about 100 on test sensor.
+#define MINIMUMPRESSURE 50 //ideal working pressure. Atmospheric about 100 on test sensor. Set ex 50 to go atmospheric,
 #define HYSTERISIS 10 //hysterisis for position adjust. Larger value -> less small adjustments -> less power loss
-
-#define SERIALSPEED 115200
 
 //servo declaratons for valve control
 Servo eservofill;  // extend servo1
@@ -39,20 +60,24 @@ Servo eservoflush;  // extend servo2
 Servo rservofill;  // retract servo1
 Servo rservoflush;  // retract servo2
 
+//define lidar
+VL53L0X lidar;
+
 //define and set some global variables
 unsigned long previousMillis;  //variable for time measurement
-int wantpos=MINLENGTH+50; //adjusted by serial input and potmeter. 
-int movespeed=10;  //adjusted by serial input. Sets valve opening factor (servo angle from SERVOSTARTPOS). Careful since input also requires a wantpos
+int wantpos=0; //adjusted by serial input and potmeter. 
+int havepos=0;  //populate in case read fails
+int movespeed=20;  //adjusted by serial input. Sets valve opening factor (servo angle from SERVOSTARTPOS).
 
 //read some sensor values
-int havepos=analogRead(DISTANCEPIN); //read distance. TODO adapt to sensor. potmeter for test
 int extendpressure=analogRead(EPNEUMATICPIN);
 int retractpressure=analogRead(RPNEUMATICPIN);
 int counter=0; //for benchmark
 
 void setup()
 {
-  Serial.begin(SERIALSPEED);
+  Serial.begin(115200);
+  Wire.begin();
   
   //attach servos and set to closed position
   eservofill.attach(ESERVOPINFILL); 
@@ -61,6 +86,19 @@ void setup()
   rservoflush.attach(RSERVOPINFLUSH); 
   stopactuator(); //sets all servos to closed position
 
+  //initialise lidar
+  Serial.print("Probe I2C VL53L0X: ");
+  lidar.init();
+  lidar.setTimeout(500);
+  havepos=lidar.readRangeSingleMillimeters()-MINLENGTH;
+    if (havepos>0) {
+      Serial.print("Lidar found, measured range: ");
+      Serial.println(havepos);
+    } else {
+        Serial.println("ALERT: Lidar missing. Halting");
+        while (1) {}
+    }
+  
   //enable pullup for emergency read and bleed switch. Short emergency to ground to run actuator.
   pinMode(EMERGENCYPIN, INPUT_PULLUP);
   pinMode(BLEEDPIN, INPUT_PULLUP); 
@@ -78,15 +116,21 @@ void loop()
 { 
   unsigned long currentMillis = millis(); //time concept
   
-  //read potmeter, translate to want position (adjust speed via serial - obs for required wantpos)
-  wantpos = map(analogRead(POTMETERPIN), 0, 1023, 0, STROKELENGTH); // scale to stroke length
+  //read potmeter, translate to want position (adjust speed via serial). Ignore if 0.
+  if (analogRead(POTMETERPIN)>0) {
+    wantpos = map(analogRead(POTMETERPIN), 0, 1023, 0, STROKELENGTH); // scale to stroke length
+  }
   
   //check if emergency, pull to ground for actuator run (internal pullup enabled)
  if (digitalRead(EMERGENCYPIN)) { //if emergency pin NOT shorted to ground run stopactuator. Pin has enabled internal pullup.
     if (digitalRead(BLEEDPIN)) { 
-     bleedactuator(); //close input valves and eject chambers if EMERGENCYPIN and BLEEDPIN NOT shorted to ground.
+      Serial.println("Bleedactuator, input valves set -10 from startpos and flush open. Script delay 1s");
+      bleedactuator(); //close input valves and eject chambers if EMERGENCYPIN and BLEEDPIN NOT shorted to ground.
+      delay(1000); //to avoid serial spam
     } else {
+      Serial.println("Stopactuator, all valves set -10 from startpos. Script delay 1s");
       stopactuator(); //only close all valves if bleedpin still shorted to ground
+      delay(1000); //to avoid serial spam
     }
   } else { //normal operation
     runactuator(); //run PID statemachine.
@@ -118,7 +162,7 @@ void runactuator() { //simple statemachine, operates by calls to position reads 
   if (movespeed > SERVORANGE) {movespeed=SERVORANGE;}
 
   //read some sensor values
-  havepos=analogRead(DISTANCEPIN)-MINLENGTH; //read distance, adjusted for defined minimum length to set zero point. TODO adapt to laser sensor.
+  havepos=lidar.readRangeSingleMillimeters()-MINLENGTH; //read distance, adjusted for defined minimum length to set zero point. 
   //if (havepos < 0) {havepos=0;} //should avoid negative position calculation? commented out for now.
   extendpressure=analogRead(EPNEUMATICPIN); //pressure on extend line
   retractpressure=analogRead(RPNEUMATICPIN); //pressure on retract line
@@ -153,30 +197,21 @@ void runactuator() { //simple statemachine, operates by calls to position reads 
 } //end statemachine
 
 void stopactuator() { //sets all servos to a bit beyond closed position. startpos is just before opening.
-  Serial.println("Stopactuator, all valves set -10 from startpos. Script delay 1s");
   eservofill.write(SERVOSTARTPOS-10); 
   eservoflush.write(SERVOSTARTPOS-10);
   rservofill.write(SERVOSTARTPOS-10); 
   rservoflush.write(SERVOSTARTPOS-10);
-  delay(1000); //to avoid serial spam
 }
 
 void bleedactuator() { //slowly release pressure based on input (for shutdown)
-  Serial.println("Bleedactuator, input valves set -10 from startpos and flush open. Script delay 1s");
   eservofill.write(SERVOSTARTPOS-10); 
   eservoflush.write(SERVOSTARTPOS+BLEEDANGLE);
   rservofill.write(SERVOSTARTPOS-10); 
   rservoflush.write(SERVOSTARTPOS+BLEEDANGLE);
-  delay(1000); //to avoid serial spam
 }
 
-/*
-  SerialEvent occurs whenever a new data comes in the
- hardware serial RX.  This routine is run between each
- time loop() runs, so using delay inside loop can delay
- response.  Multiple bytes of data may be available.
- */
-void serialEvent() {
+
+void serialEvent() { //runs on interrupt hardware RX.
   while (Serial.available() > 0) {
     // look for the next valid integer in the incoming serial stream:
     wantpos = Serial.parseInt();

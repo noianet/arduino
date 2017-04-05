@@ -21,13 +21,17 @@
         Will only run if emergencypin and bleedswitch not pulled to ground. Sets all input servos to -20 deg and flush to defined BLEEDANGLE (10). Delay 1000ms with serial prompt,
   General IO:
       Serial input on interrupt, valid input are distance,speed ex 200,30. Routine does input validation basend on constants.
+  Overkill: 
+      I2C LCD support (adress 0x3F)
   
+  TODO: Add compensating speed/motion calculations when close to wantpos to avoid overshoot if necessary. Need to test with HW, might use a variant of biased hysterisis.
   
   Remember to short emergency pin to ground to run actuator (internal pullup).
   Serial set at 115200.
 */
 #include <Wire.h>
 #include <VL53L0X.h>
+#include <LiquidCrystal_I2C.h>
 #include <Servo.h>
 #define LOG_PERIOD 1000  //Serial output logging period in milliseconds.
 
@@ -38,9 +42,9 @@
 #define ESERVOPINFLUSH 7 //extend servo1 
 #define RSERVOPINFILL 8 //retract servo1
 #define RSERVOPINFLUSH 9 //retract servo1 
-#define EPNEUMATICPIN A1 //pneumatic sensor extend line
-#define RPNEUMATICPIN A2 //pneumatic sensor retract line
-#define POTMETERPIN A3 //for manual position adjust
+#define EPNEUMATICPIN A0 //pneumatic sensor extend line
+#define RPNEUMATICPIN A1 //pneumatic sensor retract line
+#define POTMETERPIN A6 //for manual position adjust
 //lidar connected to I2C bus at A4 (SDA) and A5 (SCL)
 
 //Physical definitions:
@@ -51,7 +55,7 @@
 #define BLEEDANGLE 10 //servo angle for bleed actuator, higher for quicker pressure release
 
 //Pneumatics relate. This factor will control energy efficiency (too much or too little venting) and somewhat speed,
-#define MINIMUMPRESSURE 50 //ideal working pressure. Atmospheric about 100 on test sensor. Set ex 50 to go atmospheric,
+#define MINIMUMPRESSURE 1 //ideal working pressure. Atmospheric about 100 on test sensor. Set ex 50 to go atmospheric,
 #define HYSTERISIS 10 //hysterisis for position adjust. Larger value -> less small adjustments -> less power loss
 
 //servo declaratons for valve control
@@ -62,6 +66,9 @@ Servo rservoflush;  // retract servo2
 
 //define lidar
 VL53L0X lidar;
+
+//LCD init, yes actually...
+LiquidCrystal_I2C lcd(0x3F,20,4);  // set the LCD address to 0x3F for a 16 chars and 2 line display
 
 //define and set some global variables
 unsigned long previousMillis;  //variable for time measurement
@@ -78,6 +85,10 @@ void setup()
 {
   Serial.begin(115200);
   Wire.begin();
+  lcd.init();
+  lcd.backlight();
+  lcd.setCursor(5,0);
+  lcd.print("Startup");
   
   //attach servos and set to closed position
   eservofill.attach(ESERVOPINFILL); 
@@ -91,10 +102,15 @@ void setup()
   lidar.init();
   lidar.setTimeout(500);
   havepos=lidar.readRangeSingleMillimeters()-MINLENGTH;
+//DEBUG/TODO: temp lock to bypass missing lidar==================================================
+  havepos=1000; //DEBUG/TODO: temp lock to bypass missing lidar
+//DEBUG/TODO: temp lock to bypass missing lidar==================================================
     if (havepos>0) {
       Serial.print("Lidar found, measured range: ");
       Serial.println(havepos);
     } else {
+        lcd.clear();
+        lcd.print("!LIDAR MISSING!");
         Serial.println("ALERT: Lidar missing. Halting");
         while (1) {}
     }
@@ -108,7 +124,8 @@ void setup()
   digitalWrite(13, HIGH);
   delay(1500);
   digitalWrite(13, LOW); 
-  
+  lcd.setCursor(3,0);
+  lcd.print("Setup done");
   Serial.println("Arduino setup complete");
 }
 
@@ -117,19 +134,25 @@ void loop()
   unsigned long currentMillis = millis(); //time concept
   
   //read potmeter, translate to want position (adjust speed via serial). Ignore if 0.
-  if (analogRead(POTMETERPIN)>0) {
+  if (analogRead(POTMETERPIN) > 10) { //somewhat larger than 0 to avoid noise read issues
     wantpos = map(analogRead(POTMETERPIN), 0, 1023, 0, STROKELENGTH); // scale to stroke length
   }
   
   //check if emergency, pull to ground for actuator run (internal pullup enabled)
  if (digitalRead(EMERGENCYPIN)) { //if emergency pin NOT shorted to ground run stopactuator. Pin has enabled internal pullup.
     if (digitalRead(BLEEDPIN)) { 
-      Serial.println("Bleedactuator, input valves set -10 from startpos and flush open. Script delay 1s");
       bleedactuator(); //close input valves and eject chambers if EMERGENCYPIN and BLEEDPIN NOT shorted to ground.
+      Serial.println("Bleedactuator, input valves set -10 from startpos and flush open. Script delay 1s");
+      lcd.clear();
+      lcd.print("Emergency stop");
       delay(1000); //to avoid serial spam
     } else {
-      Serial.println("Stopactuator, all valves set -10 from startpos. Script delay 1s");
       stopactuator(); //only close all valves if bleedpin still shorted to ground
+      Serial.println("Stopactuator, all valves set -10 from startpos. Script delay 1s");
+      lcd.clear();
+      lcd.print("Emergency stop");
+      lcd.setCursor(0,1);
+      lcd.print("Bleed chambers");
       delay(1000); //to avoid serial spam
     }
   } else { //normal operation
@@ -150,6 +173,20 @@ void loop()
       Serial.print(wantpos);
       Serial.print(" havepos: ");
       Serial.println(havepos);
+      
+      lcd.clear();
+      lcd.print("Pos:");
+      //lcd.setCursor(5,0);
+      lcd.print(havepos);
+      lcd.setCursor(9,0);
+      lcd.print("W:");
+      lcd.print(wantpos);
+      lcd.setCursor(0,1);
+      lcd.print("ep:");
+      lcd.print(extendpressure);
+      lcd.setCursor(8,1);
+      lcd.print("rp:");
+      lcd.print(retractpressure);
       counter=0;
     }
     counter++;
@@ -162,7 +199,11 @@ void runactuator() { //simple statemachine, operates by calls to position reads 
   if (movespeed > SERVORANGE) {movespeed=SERVORANGE;}
 
   //read some sensor values
-  havepos=lidar.readRangeSingleMillimeters()-MINLENGTH; //read distance, adjusted for defined minimum length to set zero point. 
+//DEBUG/TODO: temp lock to bypass missing lidar. Remove comment==================================================
+  //havepos=lidar.readRangeSingleMillimeters()-MINLENGTH; //read distance, adjusted for defined minimum length to set zero point. 
+//DEBUG/TODO: temp lock to bypass missing lidar==================================================
+
+
   //if (havepos < 0) {havepos=0;} //should avoid negative position calculation? commented out for now.
   extendpressure=analogRead(EPNEUMATICPIN); //pressure on extend line
   retractpressure=analogRead(RPNEUMATICPIN); //pressure on retract line

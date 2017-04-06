@@ -55,7 +55,7 @@
 #define BLEEDANGLE 10 //servo angle for bleed actuator, higher for quicker pressure release
 
 //Pneumatics relate. This factor will control energy efficiency (too much or too little venting) and somewhat speed,
-#define MINIMUMPRESSURE 1 //ideal working pressure. Atmospheric about 100 on test sensor. Set ex 50 to go atmospheric,
+#define MINIMUMPRESSURE 50  //ideal working pressure. Atmospheric about 100 on test sensor. Set ex 50 to go atmospheric,
 #define HYSTERISIS 10 //hysterisis for position adjust. Larger value -> less small adjustments -> less power loss
 
 //servo declaratons for valve control
@@ -87,7 +87,7 @@ void setup()
   Wire.begin();
   lcd.init();
   lcd.backlight();
-  lcd.setCursor(5,0);
+  lcd.setCursor(4,0);
   lcd.print("Startup");
   
   //attach servos and set to closed position
@@ -145,14 +145,14 @@ void loop()
       Serial.println("Bleedactuator, input valves set -10 from startpos and flush open. Script delay 1s");
       lcd.clear();
       lcd.print("Emergency stop");
+      lcd.setCursor(0,1);
+      lcd.print("Bleed chambers");
       delay(1000); //to avoid serial spam
     } else {
       stopactuator(); //only close all valves if bleedpin still shorted to ground
       Serial.println("Stopactuator, all valves set -10 from startpos. Script delay 1s");
       lcd.clear();
       lcd.print("Emergency stop");
-      lcd.setCursor(0,1);
-      lcd.print("Bleed chambers");
       delay(1000); //to avoid serial spam
     }
   } else { //normal operation

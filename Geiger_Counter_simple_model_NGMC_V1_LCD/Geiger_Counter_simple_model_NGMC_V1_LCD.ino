@@ -9,18 +9,19 @@ Geiger counter details:
   Softserial for bluetooth mobile reporting. Adapted for app  "Bluetooth Terminal/Graphics" by Emrecan ÇETİN. Uses pin 11=RX, 12=TX (RX not in use for now)
      Format required by app:  Evalue1,value2,value3...\n. Data sent are: Ecpm,usv,usv_average\n
      Using HC-06 bt device, usually pairing passcode is 1234.
-  LCD support (pin 3,4,5,6,7,8)
-  External 5 LED row indicator support (pin A0,A1,A2,A3,A4). Separate funtion for led fade effect.
+  LCD support I2C, A4=SDA, A5=SCL.
+  External 5 LED row indicator support with fade for increased resolution. Indicates counts pr. 10/sec.
   
-  TODO: Store CPM to large register/stack and serial input command for datadump. Include some LCD display update "download mode" for example).
+  TODO: Store to SD card?
   TODO: Buttons to do some stuff?
   TODO: rad accumulator calculation and a "run away" warning?
 */
-#include <LiquidCrystal.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
 #include <SoftwareSerial.h>
 // initialize the library with the numbers of the interface pins
-LiquidCrystal lcd(3,4,5,6,7,8);
-SoftwareSerial btSerial(11, 12); // RX, TX
+LiquidCrystal_I2C lcd(0x3F,20,4);
+SoftwareSerial btSerial(11, 12); // RX, TX for bluetooth adapter
 
 #define LOG_PERIOD 30000  //Logging period in milliseconds, recommended value 15000-60000. NB: correct usv_accumulated calculation if changed
 #define MAX_PERIOD 60000  //Maximum logging period without modifying this sketch
@@ -30,57 +31,64 @@ SoftwareSerial btSerial(11, 12); // RX, TX
 //#define USV_CONVERSION 151.5 //for M4011 tube, 
 //#define USV_CONVERSION 175.43 //for SBM-20 tube
 
-// CPM threshold values for the led bar
-#define TH1 45
-#define TH2 95
-#define TH3 200
-#define TH4 400
-#define TH5 600
+// CPS threshold values for the led bar (resets 10 times pr sec),
+#define TH0 40 
+#define TH1 80 
+#define TH2 120 
+#define TH3 160 
+#define TH4 200
 
-//Pins used for LED array (digital writes)
-int ledArray [] = {A0,A1,A2,A3,A4};
+//Pins used for LED array. Must be PWM capable
+int ledArray [] = {3,5,6,9,10};
 
 // Variables
-unsigned long counts;     //variable for GM Tube events
-unsigned long cpm;        //variable for CPM
+unsigned long counts=0;     //variable for GM Tube events
+unsigned long cpm=0;        //variable for CPM
+unsigned long ledcps=0;        //led counts pr. 10/second
 unsigned int multiplier;  //variable for calculation CPM in this sketch
 unsigned long previousMillis;  //variable for time measurement
+unsigned long previousLedMillis;  //variable for time measurement
 float usv_average=0.20;  //variable for uSv, starting with avg. 0.20
 float usv_average_old=0.20;  //variable for uSv last reading for LCD arrow, starting with avg. 0.20
 float usv_accumulated=0;  //variable.for accumulated since boot/reset
 boolean lcd_mode=1; //used to swap LCD info
 
 void setup(){  
-  counts = 0;
-  cpm = 0;
   multiplier = MAX_PERIOD / LOG_PERIOD;      //calculating multiplier, depend on your log period
   Serial.begin(115200);
   btSerial.begin(9600);
   attachInterrupt(0, tube_impulse, FALLING);   //define external interrupt 0
   
+  ledFade(TH4-1); //all on LEDBAR
   //set up the LCD\'s number of columns and rows:
-  lcd.begin(16, 2);
-  lcd.clear();
+  lcd.init();                      // initialize the lcd 
+  lcd.backlight();
   lcd.setCursor(0, 0);
   lcd.print("Radiation Sensor");
   lcd.setCursor(2,1);
   lcd.print("Please wait"); 
 
+
    //flash onboard led to indicate setup done
   pinMode(13, OUTPUT);
   digitalWrite(13, HIGH);
   delay(1500);
+  ledFade(TH2-1);  //leddbar medium
   digitalWrite(13, LOW); 
   delay(1000);
+  
+  ledFade(0); //reset ledbar
   
   Serial.println("Arduino setup complete");
 }
 
 void loop(){                                
   unsigned long currentMillis = millis();
+  
+  //Time sequence for LCD and serial updates
   if(currentMillis - previousMillis > LOG_PERIOD){
     previousMillis = currentMillis;
-    cpm = counts * multiplier;
+    cpm = counts * multiplier; //adjustable by constants
     
     //const float conversion_factor
     float usv = (float)cpm / USV_CONVERSION;
@@ -116,14 +124,6 @@ void loop(){
     lcd.print("Sv/h avg");
     usv_average_old=usv_average; //update with last reading
     
-    //led array 
-    if(cpm <= TH1) ledVar(0);
-    if((cpm <= TH2)&&(cpm>TH1)) ledVar(1);
-    if((cpm <= TH3)&&(cpm>TH2)) ledVar(2);
-    if((cpm <= TH4)&&(cpm>TH3)) ledVar(3);
-    if((cpm <= TH5)&&(cpm>TH4)) ledVar(4);
-    if(cpm>TH5) ledVar(5);
-    
     //USB serial
     Serial.print("cpm: ");
     if (cpm < 10) {Serial.print(" ");} //adds extra space if single digit to clean up formatting
@@ -148,60 +148,50 @@ void loop(){
     
     counts = 0;
   }
+  
+  if(currentMillis - previousLedMillis > 100){ //run 10 times pr second
+    previousLedMillis = currentMillis;
+    ledFade(ledcps);
+    ledcps=0; //reset counter
+  }  
 }
 
-void ledVar(int value){  //function for 5x LED row update
-  if (value > 0){
-    for(int i=0;i<=value;i++){
-      digitalWrite(ledArray[i],HIGH);
-    }
-    for(int i=5;i>value;i--){
-      digitalWrite(ledArray[i],LOW);
-    }
-  }
-  else {
-    for(int i=5;i>=0;i--){
-      digitalWrite(ledArray[i],LOW);
-    }
-  }
-}
-
-void ledFade(int value, int d = 0){  //function for 5x LED row update with fading effect, d for delay which defaults to 0
-  if (value > 0){
-    for(int i=0;i<=value;i++){
-      // fade in from min to max in increments of 5 points:
-      for (int fadeValue = 0 ; fadeValue <= 255; fadeValue += 5) {
-        // sets the value (range from 0 to 255):
-        analogWrite(ledArray[i], fadeValue);
-        // wait for d milliseconds to see the dimming effect
-       delay(d);
-      }
-    }
-    for(int i=5;i>value;i--){
-      // fade out from max to min in increments of 5 points:
-      for (int fadeValue = 255 ; fadeValue >= 0; fadeValue -= 5) {
-        // sets the value (range from 0 to 255):
-        analogWrite(ledArray[i], fadeValue);
-        // wait for d milliseconds to see the dimming effect
-        delay(d);
-      }
-    }
-  } 
-  else {
-    for(int i=5;i>=0;i--){
-      // fade out from max to min in increments of 5 points:
-      for (int fadeValue = 255 ; fadeValue >= 0; fadeValue -= 5) {
-        // sets the value (range from 0 to 255):
-        analogWrite(ledArray[i], fadeValue);
-        // wait for d milliseconds to see the dimming effect
-        delay(d);
-      }
-    }
-  }
+void ledFade(int value){  //function for 5x LED row update with fading effect, d for delay which defaults to 0
+    
+    //Set LED values, mapped from value. In theory should adjust to ranges....
+   if(value < TH0) {
+         //DEBUG: Print current value
+    Serial.print(" LedCPdS: : ");
+    Serial.println(map(value,0,TH0,0,255));
+      analogWrite(ledArray[0],map(value,0,TH0,0,255)); 
+      digitalWrite(ledArray[1], LOW); digitalWrite(ledArray[2], LOW); digitalWrite(ledArray[3], LOW); digitalWrite(ledArray[4], LOW);
+    } else if(value < TH1) {
+      digitalWrite(ledArray[0], HIGH);
+      value=value-TH0;
+      analogWrite(ledArray[1],map(value,0,TH1,0,255)); 
+      digitalWrite(ledArray[2], LOW); digitalWrite(ledArray[3], LOW); digitalWrite(ledArray[4], LOW);
+    } else if(value < TH2) {
+      digitalWrite(ledArray[0], HIGH); digitalWrite(ledArray[1], HIGH);
+      value=value-TH1;
+      analogWrite(ledArray[2],map(value,0,TH2,0,255)); 
+      digitalWrite(ledArray[3], LOW); digitalWrite(ledArray[4], LOW);
+    } else if(value < TH3) {
+      digitalWrite(ledArray[0], HIGH); digitalWrite(ledArray[1], HIGH); digitalWrite(ledArray[2], HIGH);
+      value=value-TH2;
+      analogWrite(ledArray[3],map(value,0,TH3,0,255)); 
+      digitalWrite(ledArray[4], LOW);
+   } else if(value < TH4) {
+      digitalWrite(ledArray[0], HIGH); digitalWrite(ledArray[1], HIGH); digitalWrite(ledArray[2], HIGH); digitalWrite(ledArray[3], HIGH);
+      value=value-TH3;
+      analogWrite(ledArray[4],map(value,0,TH4,0,255)); 
+    } else {
+      digitalWrite(ledArray[0], HIGH); digitalWrite(ledArray[1], HIGH); digitalWrite(ledArray[2], HIGH); digitalWrite(ledArray[3], HIGH); digitalWrite(ledArray[4], HIGH);
+    }      
 }
 
 void tube_impulse(){       //function for capturing interrupt events from Geiger Kit
   counts++;
+  ledcps++;
   //switch state onboard led to indicate response
   digitalWrite(13, !digitalRead(13));
 }

@@ -161,8 +161,8 @@ void ledFade(int value){  //function for 5x LED row update with fading effect, d
     //Set LED values, mapped from value. In theory should adjust to ranges....
    if(value < TH0) {
          //DEBUG: Print current value
-    Serial.print(" LedCPdS: : ");
-    Serial.println(map(value,0,TH0,0,255));
+    //Serial.print(" LedCPdS: : ");
+    //Serial.println(map(value,0,TH0,0,255));
       analogWrite(ledArray[0],map(value,0,TH0,0,255)); 
       digitalWrite(ledArray[1], LOW); digitalWrite(ledArray[2], LOW); digitalWrite(ledArray[3], LOW); digitalWrite(ledArray[4], LOW);
     } else if(value < TH1) {

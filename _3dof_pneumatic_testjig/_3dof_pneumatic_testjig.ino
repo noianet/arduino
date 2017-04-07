@@ -44,7 +44,7 @@
 #define RSERVOPINFLUSH 9 //retract servo1 
 #define EPNEUMATICPIN A0 //pneumatic sensor extend line
 #define RPNEUMATICPIN A1 //pneumatic sensor retract line
-#define POTMETERPIN A6 //for manual position adjust
+#define POTMETERPIN A2 //for manual position adjust
 //lidar connected to I2C bus at A4 (SDA) and A5 (SCL)
 
 //Physical definitions:

@@ -1,4 +1,4 @@
-/* 
+                                                                        /* 
   Pneumatic testjig with statemachine. 
   Overview hardware:
       4x servos, 4x valves , 2x pressure sensors, 1x VL53L0X lidar. Single pneumatic cylinder.
@@ -85,6 +85,7 @@ void setup()
 {
   Serial.begin(115200);
   Wire.begin();
+  TWBR = 24; // 400kHz I2C clock (200kHz if CPU is 8MHz)
   lcd.init();
   lcd.backlight();
   lcd.setCursor(4,0);
@@ -139,7 +140,8 @@ void loop()
   }
   
   //check if emergency, pull to ground for actuator run (internal pullup enabled)
- if (digitalRead(EMERGENCYPIN)) { //if emergency pin NOT shorted to ground run stopactuator. Pin has enabled internal pullup.
+  //TODO: add to if statement " or lidar.timeoutOccurred()" - temp removed to work around missing lidar
+ if (digitalRead(EMERGENCYPIN)) { //if emergency pin NOT shorted to ground or no respinse from lidar run stopactuator. 
     if (digitalRead(BLEEDPIN)) { 
       bleedactuator(); //close input valves and eject chambers if EMERGENCYPIN and BLEEDPIN NOT shorted to ground.
       Serial.println("Bleedactuator, input valves set -10 from startpos and flush open. Script delay 1s");

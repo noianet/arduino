@@ -10,6 +10,8 @@ Geiger counter details:
      Format required by app:  Evalue1,value2,value3...\n. Data sent are: Ecpm,usv,usv_average\n
      Using HC-06 bt device, usually pairing passcode is 1234.
   LCD support I2C, A4=SDA, A5=SCL.
+     Pin A0 to switch LCD backlight on/off.  (Internal pullup) TODO - auto timeout?
+  
   External 5 LED row indicator support with fade for increased resolution. Indicates counts pr. 10/sec.
 
   TODO: Store to SD card?
@@ -25,6 +27,7 @@ SoftwareSerial btSerial(11, 12); // RX, TX for bluetooth adapter
 
 #define LOG_PERIOD 30000  //Logging period in milliseconds, recommended value 15000-60000. NB: correct usv_accumulated calculation if changed
 #define MAX_PERIOD 60000  //Maximum logging period without modifying this sketch
+#define BACKLIGHTBUTTON A0 //pushbutton to switch backlight. remember pull down resistor.
 
 #define USV_CONVERSION 123.147092360319  //conversion factor for J305 tube. Factor: 0.00812037037037
 //link to data for J305: https://www.cooking-hacks.com/documentation/tutorials/geiger-counter-radiation-sensor-board-arduino-raspberry-pi-tutorial/
@@ -48,15 +51,19 @@ unsigned long ledcps = 0;      //led counts pr. 10/second
 unsigned int multiplier;  //variable for calculation CPM in this sketch
 unsigned long previousMillis;  //variable for time measurement
 unsigned long previousLedMillis;  //variable for time measurement LED barreset
+unsigned long debounceMillis;   // debounce time variable for input buttons
 float usv_average = 0.20; //variable for uSv, starting with avg. 0.20
 float usv_average_old = 0.20; //variable for uSv last reading for LCD arrow, starting with avg. 0.20
 float usv_accumulated = 0; //variable.for accumulated since boot/reset
 boolean lcd_mode = 1; //used to swap LCD info
+boolean lcdbacklightstate=1; //backlight state (on at boot)
+
 
 void setup() {
   multiplier = MAX_PERIOD / LOG_PERIOD;      //calculating multiplier, depend on your log period
   Serial.begin(115200);
   btSerial.begin(9600);
+  TWBR = 24; // 400kHz I2C clock (200kHz if CPU is 8MHz)
   attachInterrupt(0, tube_impulse, FALLING);   //define external interrupt 0
 
   ledFade(TH4 - 1); //all on LEDBAR
@@ -68,7 +75,8 @@ void setup() {
   lcd.setCursor(2, 1);
   lcd.print("Please wait");
 
-
+  pinMode(BACKLIGHTBUTTON, INPUT_PULLUP);  //input push button for backlight switching
+  
   //flash onboard led to indicate setup done
   pinMode(13, OUTPUT);
   digitalWrite(13, HIGH);
@@ -85,7 +93,7 @@ void setup() {
 void loop() {
   unsigned long currentMillis = millis();
 
-  //Time sequence for LCD and serial updates
+  //LCD and serial output/updates millis check
   if (currentMillis - previousMillis > LOG_PERIOD) {
     previousMillis = currentMillis;
     cpm = counts * multiplier; //adjustable by constants
@@ -159,12 +167,25 @@ void loop() {
     btSerial.print("\n");
 
     counts = 0;
-  }
-
+  } 
+  
+  //Ledbar millis check
   if (currentMillis - previousLedMillis > 100) { //run 10 times pr second
     previousLedMillis = currentMillis;
     ledFade(ledcps);
     ledcps = 0; //reset counter
+  }
+  
+  //LCD backlight button millis check (to avod button bounce issues)
+  if (currentMillis - debounceMillis > 500 && !digitalRead(BACKLIGHTBUTTON)) { 
+    debounceMillis = currentMillis;
+    if (lcdbacklightstate) {
+      lcd.noBacklight(); // turn off backlight
+      lcdbacklightstate=0;
+    } else {
+      lcd.backlight(); // turn on backlight.
+      lcdbacklightstate=1;
+    }
   }
 }
 

@@ -15,6 +15,7 @@
        "movespeed" variable adjusts valve opening angle from SERVOSTARTPOS, and can be controlled via serial input. Hard coced SERVORANGE for max opening angle from SERVOSTARTPOS.
        "wantpos" variable used for requested position. Can be controlled via POTMETERPIN (or if analogRead commented out in loop() directly via serial),
        No delays, millis used for serial output every LOG_PERIOD ms. Initial benchmarking on an Arduino nano gives 1300 loops/sec.
+       NBNB: Fill servo reversing angle.
     stopactuator() function: 
         Will run if emergencypin not pulled to ground. Sets all servos to -20 deg. Delay 1000ms with serial prompt,
     bleedactuator() function:
@@ -50,13 +51,14 @@
 //Physical definitions:
 #define MINLENGTH 100 //min stroke position in mm. Is used as zero point. Related to position sensor positioning.
 #define STROKELENGTH 2000 //max stroke length in mm from MINLENGTH
-#define SERVOSTARTPOS 30 //zero position for valve servos. Physical adjust almost open in this position.NB: emergency set this at -10
-#define SERVORANGE 60 //max movement above startpos (added from startpos)
-#define BLEEDANGLE 10 //servo angle for bleed actuator, higher for quicker pressure release
+#define FILLSERVOSTARTPOS 0 //zero position for valve servos. Max is 80
+#define FLUSHSERVOSTARTPOS 180 //zero position for valve servos. NB: REVERSING. Minimum here is 100
+#define SERVORANGE 80 //max movement above startpos (diff from startpos)
+#define BLEEDANGLE 30 //servo angle for bleed actuator, higher for quicker pressure release
 
 //Pneumatics relate. This factor will control energy efficiency (too much or too little venting) and somewhat speed,
 #define MINIMUMPRESSURE 50  //ideal working pressure. Atmospheric about 100 on test sensor. Set ex 50 to go atmospheric,
-#define HYSTERISIS 10 //hysterisis for position adjust. Larger value -> less small adjustments -> less power loss
+#define HYSTERISIS 20 //hysterisis for position adjust. Larger value -> less small adjustments -> less power loss
 
 //servo declaratons for valve control
 Servo eservofill;  // extend servo1
@@ -214,43 +216,40 @@ void runactuator() { //simple statemachine, operates by calls to position reads 
   // if position requires pressure below MINIMUMPRESSURE, hold valves closed (opposite direction will compensate)
   
   if (((havepos+HYSTERISIS) < wantpos) && (havepos < STROKELENGTH)) { //need to extend. Check to avoid beyond max set by STROKELENGTH
-    rservofill.write(SERVOSTARTPOS); //close input on retract line
-    eservoflush.write(SERVOSTARTPOS); //close flush on extend line
-    eservofill.write(SERVOSTARTPOS+movespeed); //open fill on extend line
+    rservofill.write(FILLSERVOSTARTPOS); //close input on retract line
+    eservoflush.write(FLUSHSERVOSTARTPOS); //close flush on extend line
+    eservofill.write(FILLSERVOSTARTPOS+movespeed); //open fill on extend line
     if (retractpressure>MINIMUMPRESSURE) { //check if above minimum pressure on retract line, eject air if is, else close
-      rservoflush.write(SERVOSTARTPOS+movespeed);   
+      rservoflush.write(FLUSHSERVOSTARTPOS-movespeed);   
      } else {
-      rservoflush.write(SERVOSTARTPOS); 
+      rservoflush.write(FLUSHSERVOSTARTPOS); 
      }  
   } else if (((havepos-HYSTERISIS) > wantpos) && (havepos > 0)) { //need to retract, check to avoid going below zero point defined by MINLENGTH
-    eservofill.write(SERVOSTARTPOS); //close input on extend line
-    rservoflush.write(SERVOSTARTPOS); //close flush on retract line
-    rservofill.write(SERVOSTARTPOS+movespeed); //open fill on retract line
+    eservofill.write(FILLSERVOSTARTPOS); //close input on extend line
+    rservoflush.write(FLUSHSERVOSTARTPOS); //close flush on retract line
+    rservofill.write(FILLSERVOSTARTPOS+movespeed); //open fill on retract line
     if (extendpressure>MINIMUMPRESSURE) { //check if above minimum pressure on extend line, eject air if is, else close
-      eservoflush.write(SERVOSTARTPOS+movespeed);   
+      eservoflush.write(FLUSHSERVOSTARTPOS-movespeed);   
      } else {
-      eservoflush.write(SERVOSTARTPOS); 
+      eservoflush.write(FLUSHSERVOSTARTPOS); 
      }  
   } else { //all good, close valves
-    eservofill.write(SERVOSTARTPOS); 
-    eservoflush.write(SERVOSTARTPOS);
-    rservofill.write(SERVOSTARTPOS); 
-    rservoflush.write(SERVOSTARTPOS);
+    stopactuator();
   }
 } //end statemachine
 
 void stopactuator() { //sets all servos to a bit beyond closed position. startpos is just before opening.
-  eservofill.write(SERVOSTARTPOS-10); 
-  eservoflush.write(SERVOSTARTPOS-10);
-  rservofill.write(SERVOSTARTPOS-10); 
-  rservoflush.write(SERVOSTARTPOS-10);
+  eservofill.write(FILLSERVOSTARTPOS); 
+  eservoflush.write(FLUSHSERVOSTARTPOS);
+  rservofill.write(FILLSERVOSTARTPOS); 
+  rservoflush.write(FLUSHSERVOSTARTPOS);
 }
 
 void bleedactuator() { //slowly release pressure based on input (for shutdown)
-  eservofill.write(SERVOSTARTPOS-10); 
-  eservoflush.write(SERVOSTARTPOS+BLEEDANGLE);
-  rservofill.write(SERVOSTARTPOS-10); 
-  rservoflush.write(SERVOSTARTPOS+BLEEDANGLE);
+  eservofill.write(FILLSERVOSTARTPOS); 
+  eservoflush.write(FLUSHSERVOSTARTPOS-BLEEDANGLE);
+  rservofill.write(FILLSERVOSTARTPOS); 
+  rservoflush.write(FLUSHSERVOSTARTPOS-BLEEDANGLE);
 }
 
 

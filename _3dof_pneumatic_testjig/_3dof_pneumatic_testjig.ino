@@ -146,7 +146,7 @@ void loop()
  if (digitalRead(EMERGENCYPIN)) { //if emergency pin NOT shorted to ground or no respinse from lidar run stopactuator. 
     if (digitalRead(BLEEDPIN)) { 
       bleedactuator(); //close input valves and eject chambers if EMERGENCYPIN and BLEEDPIN NOT shorted to ground.
-      Serial.println("Bleedactuator, input valves set -10 from startpos and flush open. Script delay 1s");
+      Serial.println("Bleedactuator, input valves closed and flush open. Script delay 1s");
       lcd.clear();
       lcd.print("Emergency stop");
       lcd.setCursor(0,1);
@@ -154,7 +154,7 @@ void loop()
       delay(1000); //to avoid serial spam
     } else {
       stopactuator(); //only close all valves if bleedpin still shorted to ground
-      Serial.println("Stopactuator, all valves set -10 from startpos. Script delay 1s");
+      Serial.println("Stopactuator. Script delay 1s");
       lcd.clear();
       lcd.print("Emergency stop");
       delay(1000); //to avoid serial spam

@@ -7,7 +7,7 @@ Geiger counter details:
   Serial USB output 115200. Indicates CPM, µSv og µSv average (floating average over 10 readings)
      Example output: cpm: 20 uSv/h: 0.16 uSv/h avg: 0.17
   Softserial for bluetooth mobile reporting. Adapted for app  "Bluetooth Terminal/Graphics" by Emrecan ÇETİN. Uses pin 11=RX, 12=TX (RX not in use for now)
-     Format required by app:  Evalue1,value2,value3...\n. Data sent are: Ecpm,usv,usv_average\n
+     Format required by app:  Evalue1,value2,value3...\n. Data sent are: cpm,usv,usv_accumulated
      Using HC-06 bt device, usually pairing passcode is 1234.
   LCD support I2C, A4=SDA, A5=SCL.
      Pin A0 to switch LCD backlight on/off.  (Internal pullup) TODO - auto timeout?
@@ -23,9 +23,9 @@ Geiger counter details:
 #include <SoftwareSerial.h>
 // initialize the library with the numbers of the interface pins
 LiquidCrystal_I2C lcd(0x3F, 20, 4);
-SoftwareSerial btSerial(11, 12); // RX, TX for bluetooth adapter
+SoftwareSerial btSerial(11, 12); // RX, TX for bluetooth adapter 
 
-#define LOG_PERIOD 30000  //Logging period in milliseconds, recommended value 15000-60000. NB: correct usv_accumulated calculation if changed
+#define LOG_PERIOD 15000  //Logging period in milliseconds, recommended value 15000-60000. 
 #define MAX_PERIOD 60000  //Maximum logging period without modifying this sketch
 #define BACKLIGHTBUTTON A0 //pushbutton to switch backlight. remember pull down resistor.
 
@@ -101,7 +101,7 @@ void loop() {
     //const float conversion_factor
     float usv = (float)cpm / USV_CONVERSION;
     usv_average = ((usv_average * 9 + usv) / 10);
-    usv_accumulated = usv_accumulated + (usv / 2) / 60; //accumulated since boot/reset
+    usv_accumulated = usv_accumulated + (usv / (MAX_PERIOD/LOG_PERIOD)) / 60; //accumulated since boot/reset
 
     lcd.clear();
     lcd.setCursor(0, 0);
@@ -163,7 +163,7 @@ void loop() {
     btSerial.print(",");
     btSerial.print(usv);
     btSerial.print(",");
-    btSerial.print(usv_average);
+    btSerial.print(usv_accumulated);
     btSerial.print("\n");
 
     counts = 0;

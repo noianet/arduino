@@ -11,7 +11,7 @@
 #define SERVO2 7
 #define SERVO3 8
 #define SERVO4 9
-#define SERVOSTARTPOS 30 //start angle
+#define SERVOSTARTPOS 90 //start angle
 
 //servo declaratons for valve control
 Servo servo1;

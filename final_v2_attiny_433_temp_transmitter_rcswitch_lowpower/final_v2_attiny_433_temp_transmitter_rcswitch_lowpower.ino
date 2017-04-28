@@ -10,7 +10,7 @@
     99 Boot indicator.
 
 */
-#define DEBUG 0 //if set to debug, uses serial out instead of radio. NB: TX uses same pin as radio so switch in HW too.
+//#define DEBUG //if uncommented, uses serial out instead of radio. NB: TX uses same pin as radio so switch in HW too.
 
 #include <avr/sleep.h>
 #include <avr/wdt.h>
@@ -27,7 +27,7 @@
 #include <TinyDebugSerial.h>
 TinyDebugSerial mySerial = TinyDebugSerial();
 #else
-include <RCSwitch.h>
+#include <RCSwitch.h>
 RCSwitch radio = RCSwitch();
 #endif
 

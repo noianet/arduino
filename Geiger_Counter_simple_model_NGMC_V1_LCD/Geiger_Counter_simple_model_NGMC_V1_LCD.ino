@@ -5,27 +5,28 @@
 
     Geiger counter details:
     Geiger interrupt 0 (pin D2 on arduino mini - see attachInterrupt).
-    Onboard led swap on/off on geiger read (13 on mini)
     Serial USB output 115200. Indicates CPM, µSv og µSv average (floating average over 10 readings)
      Example output: cpm: 20 uSv/h: 0.16 uSv/h avg: 0.17
-    Softserial for bluetooth mobile reporting. Adapted for app  "Bluetooth Terminal/Graphics" by Emrecan ÇETİN. Uses pin 11=RX, 12=TX (RX not in use for now)
+    Softserial for bluetooth mobile reporting. Uses pin 11=RX, 12=TX (RX not in use for now). Select app below
      Format required by app:  Evalue1,value2,value3...\n. Data sent are: cpm,usv_average,usv_accumulated
      Using HC-06 bt device, usually pairing passcode is 1234.
-    LCD support I2C, A4=SDA, A5=SCL.
-     Pin A0 to switch LCD backlight on/off.  (Internal pullup) TODO - auto timeout?
+    External 5 LED row indicator support with fade for increased resolution. See threshold definitions below.
+    LCD support I2C, A4=SDA, A5=SCL. 
+     Pin A0 for button (Internal pullup). Events: 
+         Short push,  switch LCD backlight on/off.  
+         Medium hold: Show battery voltage
+         Long hold: Swap piezo (pin 13) on/off. See piezo volume definition below,
 
-    External 5 LED row indicator support with fade for increased resolution. Indicates counts pr. 10/sec.
-
-
-    TODO: Piezo off when screen is off. 3 modes? Disable onboard LED. HWmod.
-    TODO: Hold mode button x sec to display VCC voltage.  Added readVcc() function.
-    TODO:
+    TODO - auto timeout for LCD backlight?
 
     Misc bloat ideas:.
-    TODO: Store to SD card?
-    TODO: Buttons to do some stuff?
-    TODO: rad accumulator calculation and a "run away" warning?
+      TODO: HWmod Store to SD card?
+      TODO: HWmod RTC clock for logging
+
 */
+//Serial adaptation mobile app, uncomment one 
+#define app_btgraphics //Adapted for app  "Bluetooth Terminal/Graphics" by Emrecan ÇETİN. 
+//#define app_ezplotter  //Adapted for ezPlotter by i2A systems
 
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
@@ -37,6 +38,7 @@ SoftwareSerial btSerial(11, 12); // RX, TX for bluetooth adapter
 #define LOG_PERIOD 15000  //Logging period in milliseconds, recommended value 15000-60000. 
 #define MAX_PERIOD 60000  //Maximum logging period without modifying this sketch
 #define BACKLIGHTBUTTON A0 //pushbutton to switch backlight. remember pull down resistor.
+#define PIEZOVOLUME 20 //10-80 seems OK range, Controls microeconds pulse duration to piezo. More than 80 probably no effect since pin already are fully on.
 
 #define USV_CONVERSION 123.147092360319  //conversion factor for J305 tube. Factor: 0.00812037037037
 //link to data for J305: https://www.cooking-hacks.com/documentation/tutorials/geiger-counter-radiation-sensor-board-arduino-raspberry-pi-tutorial/
@@ -51,11 +53,12 @@ SoftwareSerial btSerial(11, 12); // RX, TX for bluetooth adapter
 #define TH4 200
 */
 //DEBUG VALUES - only have low radiation source.
-#define TH0 20
-#define TH1 40
-#define TH2 80
-#define TH3 120
-#define TH4 160
+#define TH0 4
+#define TH1 8
+#define TH2 12
+#define TH3 16
+#define TH4 20
+
 
 //Pins used for LED array. Must be PWM capable
 int ledArray [] = {3, 5, 6, 9, 10};
@@ -64,16 +67,18 @@ int ledArray [] = {3, 5, 6, 9, 10};
 unsigned long counts = 0;   //variable for GM Tube events
 unsigned long cpm = 0;      //variable for CPM
 unsigned long ledcps = 0;      //led counts pr. 10/second
+float ledfadecps = 0;      //for smoothing/fadeout
 unsigned int multiplier;  //variable for calculation CPM in this sketch
 unsigned long previousMillis;  //variable for time measurement
 unsigned long previousLedMillis;  //variable for time measurement LED barreset
 unsigned long debounceMillis;   // debounce time variable for input buttons
 int  ButtonStateCounter = 0;// hold counter.
-float usv_average = 0.20; //variable for uSv, starting with avg. 0.20
+float usv_average = 0.20; //variable for uSv, starting with avg. 0.20 - roughly normal background radiation.
 float usv_average_old = 0.20; //variable for uSv last reading for LCD arrow, starting with avg. 0.20
 float usv_accumulated = 0; //variable.for accumulated since boot/reset
 boolean lcd_mode = 1; //used to swap LCD info
 boolean lcdbacklightstate = 1; //backlight state (on at boot)
+boolean piezoenabled = 1; //swap pin 13 (and onboard led) on event. Switched by holding button long.
 
 
 void setup() {
@@ -110,7 +115,7 @@ void setup() {
 void loop() {
     unsigned long currentMillis = millis();
 
-    //LCD and serial output/updates millis check
+    //LCD, bluetooth and serial output/updates section
     if (currentMillis - previousMillis > LOG_PERIOD) {
         previousMillis = currentMillis;
         cpm = counts * multiplier; //adjustable by constants
@@ -123,15 +128,9 @@ void loop() {
         lcd.clear();
         lcd.setCursor(0, 0);
         if (lcd_mode) { //swaps between two LCD infos on first line
-            if (cpm < 10) {
-                lcd.print(" "); //add spaces to avoid jumping on 1, 10 digit numbers
-            }
-            if (cpm < 100) {
-                lcd.print(" ");
-            }
-            if (cpm < 1000) {
-                lcd.print(" ");
-            }
+            if (cpm < 10) lcd.print(" "); //add spaces to avoid jumping on 1, 10 digit numbers
+            if (cpm < 100) lcd.print(" ");
+            if (cpm < 1000) lcd.print(" ");
             lcd.print(cpm);
             lcd.print("cpm");
             lcd.setCursor(8, 0);
@@ -161,11 +160,9 @@ void loop() {
 
         //USB serial
         Serial.print("cpm: ");
-        if (cpm < 10) {
-            Serial.print(" "); //adds extra space if single digit to clean up formatting
-        }
-        //if (cpm < 100) {Serial.print(" ");} //adds extra space if single digit to clean up formatting
-        //if (cpm < 1000) {Serial.print(" ");} //adds extra space if single digit to clean up formatting
+        if (cpm < 10) Serial.print(" "); //adds extra space if single digit to clean up formatting
+        //if (cpm < 100) Serial.print(" "); //adds extra space if single digit to clean up formatting
+        //if (cpm < 1000) Serial.print(" "); //adds extra space if single digit to clean up formatting
         Serial.print(cpm);
         Serial.print(" uSv/h: ");
         Serial.print(usv);
@@ -174,7 +171,8 @@ void loop() {
         Serial.print(" uSv/h acc: ");
         Serial.println(usv_accumulated, 4);
 
-        //Bluetooth softserial
+        //Bluetooth softserial, adapted for app
+#ifdef app_btgraphics
         btSerial.print("E");
         btSerial.print(cpm);
         btSerial.print(",");
@@ -182,18 +180,28 @@ void loop() {
         btSerial.print(",");
         btSerial.print(usv_accumulated);
         btSerial.print("\n");
+#endif
+#ifdef app_ezplotter
+        btSerial.print(cpm);
+        btSerial.print(",");
+        btSerial.print(usv_average);
+        btSerial.print(",");
+        btSerial.println(usv_accumulated);
+#endif
 
         counts = 0;
-    }
+    } //END LCD, bluetooth and serial output/updates section
 
-    //Ledbar millis check
-    if (currentMillis - previousLedMillis > 100) { //run 10 times pr second
+    //Ledbar section
+    if (currentMillis - previousLedMillis > 200) { //run x times pr second
         previousLedMillis = currentMillis;
-        ledFade(ledcps);
+        //calculate fading effect. Not super accurate to get an "analog feel" perhaps
+        if (ledcps >= ledfadecps) ledfadecps=ledcps; else ledfadecps=ledfadecps/1.5+ledcps; 
+        ledFade(ledfadecps); 
         ledcps = 0; //reset counter
-    }
+    } //END Ledbar section
 
-    //LCD button check
+    //Button event section
     if (currentMillis - debounceMillis > 500 || (!digitalRead(BACKLIGHTBUTTON) && !ButtonStateCounter)) {  //check interval. Or here to catch early press
         debounceMillis = currentMillis; // reset counter
         if (!digitalRead(BACKLIGHTBUTTON)) ButtonStateCounter++; // Button is held down, increase button counter
@@ -221,43 +229,58 @@ void loop() {
             lcd.print(vccread);
             lcd.print("V ");
         }
+        if (ButtonStateCounter == 4)  {  //long press 2. Swap piezoenabled booleand and inform on LCD
+            piezoenabled=!piezoenabled;
+            lcd.backlight(); // turn on backlight in case it is off
+            lcdbacklightstate = 1;
+            lcd.clear();
+            lcd.setCursor(0, 0); //first line
+            lcd.print("Piezo buzzer:");
+            lcd.setCursor(2, 1); //second line
+            if (piezoenabled) lcd.print("ON"); else lcd.print("OFF");
+        }
         //Might add more stuff here for event 4, 6, 8 etc to count through every 2. sec..
         if (digitalRead(BACKLIGHTBUTTON)) ButtonStateCounter = 0; // Cleanup and reset button counter. Events handled above.
-    }
-} //end loop
+    } //END Button event section
+} //END loop
+
 //-----------------------------Functions/events below here----------------------------
 void tube_impulse() {  //function for capturing interrupt events from Geiger Kit
     counts++;
     ledcps++;
     //switch state onboard led to indicate response
-    digitalWrite(13, !digitalRead(13));
+    //digitalWrite(13, !digitalRead(13));
+    
+    //"ping" pin 13 if piezoenabled. 
+     if (piezoenabled) {
+       digitalWrite(13, HIGH);
+       delayMicroseconds(PIEZOVOLUME); //Not ideal with blocking in here but some delay needed for audible. Longer duration=more volume)
+       digitalWrite(13, LOW);
+     }
 }
 
 void ledFade(int value) { //function for 5x LED row update with fading effect for increased resolution.
-    //DEBUG: Print current value
-    //Serial.print(" LedCPdS: : ");
-    //Serial.println(map(value,0,TH0,0,255));
     if (value < TH0) {
         analogWrite(ledArray[0], map(value, 0, TH0, 0, 255));
         digitalWrite(ledArray[1], LOW); digitalWrite(ledArray[2], LOW); digitalWrite(ledArray[3], LOW); digitalWrite(ledArray[4], LOW);
     } else if (value < TH1) {
         digitalWrite(ledArray[0], HIGH);
-        value = - TH0; //delete previous threshold
+        value = - TH0; //subtract previous threshold
         analogWrite(ledArray[1], map(value, 0, TH1, 0, 255));
         digitalWrite(ledArray[2], LOW); digitalWrite(ledArray[3], LOW); digitalWrite(ledArray[4], LOW);
     } else if (value < TH2) {
         digitalWrite(ledArray[0], HIGH); digitalWrite(ledArray[1], HIGH);
-        value = - TH1; //delete previous threshold
+        value = - TH1; //subtract previous threshold
         analogWrite(ledArray[2], map(value, 0, TH2, 0, 255));
         digitalWrite(ledArray[3], LOW); digitalWrite(ledArray[4], LOW);
     } else if (value < TH3) {
         digitalWrite(ledArray[0], HIGH); digitalWrite(ledArray[1], HIGH); digitalWrite(ledArray[2], HIGH);
-        value = - TH2; //delete previous threshold
+        value = - TH2; //subtract previous threshold
         analogWrite(ledArray[3], map(value, 0, TH3, 0, 255));
         digitalWrite(ledArray[4], LOW);
     } else if (value < TH4) {
         digitalWrite(ledArray[0], HIGH); digitalWrite(ledArray[1], HIGH); digitalWrite(ledArray[2], HIGH); digitalWrite(ledArray[3], HIGH);
-        value = - TH3; //delete previous threshold
+        value = - TH3; //subtract previous threshold
         analogWrite(ledArray[4], map(value, 0, TH4, 0, 255));
     } else {
         digitalWrite(ledArray[0], HIGH); digitalWrite(ledArray[1], HIGH); digitalWrite(ledArray[2], HIGH); digitalWrite(ledArray[3], HIGH); digitalWrite(ledArray[4], HIGH);

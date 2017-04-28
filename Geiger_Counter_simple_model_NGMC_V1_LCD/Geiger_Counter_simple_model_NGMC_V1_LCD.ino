@@ -202,7 +202,7 @@ void loop() {
     } //END Ledbar section
 
     //Button event section
-    if (currentMillis - debounceMillis > 500 || (!digitalRead(BACKLIGHTBUTTON) && !ButtonStateCounter)) {  //check interval. Or here to catch early press
+    if (currentMillis - debounceMillis > 500 || (!digitalRead(BACKLIGHTBUTTON) && !ButtonStateCounter)) {  //check interval. Or check here to catch early press
         debounceMillis = currentMillis; // reset counter
         if (!digitalRead(BACKLIGHTBUTTON)) ButtonStateCounter++; // Button is held down, increase button counter
 
@@ -216,7 +216,7 @@ void loop() {
                 lcdbacklightstate = 1;
             }
         }
-
+        //below here will cycle forwards while button is held down. 
         if (ButtonStateCounter == 2)  {  //long press 1. Just do show battery level. Do not reset counter here, done below when button released.
             float vccread = readVcc();
             vccread = vccread / 1000; //convert from mv to V
@@ -228,8 +228,9 @@ void loop() {
             lcd.setCursor(2, 1); //second line
             lcd.print(vccread);
             lcd.print("V ");
+            ButtonStateCounter++; //increased one to avoid risk being done twice when key released
         }
-        if (ButtonStateCounter == 4)  {  //long press 2. Swap piezoenabled booleand and inform on LCD
+        if (ButtonStateCounter == 5)  {  //long press 2. Swap piezoenabled booleand and inform on LCD
             piezoenabled=!piezoenabled;
             lcd.backlight(); // turn on backlight in case it is off
             lcdbacklightstate = 1;
@@ -238,6 +239,7 @@ void loop() {
             lcd.print("Piezo buzzer:");
             lcd.setCursor(2, 1); //second line
             if (piezoenabled) lcd.print("ON"); else lcd.print("OFF");
+            ButtonStateCounter++; //increased one to avoid risk being done twice when key released
         }
         //Might add more stuff here for event 4, 6, 8 etc to count through every 2. sec..
         if (digitalRead(BACKLIGHTBUTTON)) ButtonStateCounter = 0; // Cleanup and reset button counter. Events handled above.

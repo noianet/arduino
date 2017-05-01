@@ -219,7 +219,7 @@ void loop() {
 #endif
 
         //check if backlight auto off is enabled. If true update timer and change value.
-        if (backlightautooff && lcdbacklightstate) {
+        if (backlightautooff && lcdbacklightstate && digitalRead(PUSHBUTTON)) { //dont if holding down pushbutton..
             if (backlightautooffcounter < BACKLIGHTAUTOOFF) backlightautooffcounter++;
             else { //reached counter value. Turn off backlight
                 lcd.noBacklight(); // turn off backlight
@@ -258,7 +258,7 @@ void loop() {
                     }
                     ButtonStateCounter = 0;
                 }
-            } else if (ButtonStateCounter == 2 || ButtonStateCounter == 3) {  //long press events from here. Range to get a reasonable delay. Backlight turned on always from here on out.
+            } else if (ButtonStateCounter >= 2 && ButtonStateCounter <= 4) {  //long press events from here. Range to get a reasonable delay. Backlight turned on always from here on out.
                 float vccread = readVcc();
                 vccread = vccread / 1000; //convert from mv to V
                 lcd.backlight();
@@ -270,7 +270,7 @@ void loop() {
                 lcd.print(vccread);
                 lcd.print("V ");
                 if (digitalRead(PUSHBUTTON)) ButtonStateCounter = 0; //button released while here
-            } else if (ButtonStateCounter == 4  || ButtonStateCounter == 5) { //Range here to get a reasonable delay. Switch piezo section
+            } else if (ButtonStateCounter >= 5 && ButtonStateCounter <= 7) { //Range here to get a reasonable delay. Switch piezo section
                 if (!digitalRead(PUSHBUTTON))  {
                     lcd.clear();
                     lcd.setCursor(0, 0); //first line
@@ -284,8 +284,7 @@ void loop() {
                     if (piezoenabled) lcd.print("ON "); else lcd.print("OFF");
                     ButtonStateCounter = 0;
                 }
-
-            } else if (ButtonStateCounter == 6  || ButtonStateCounter == 7) { //Range here to get a reasonable delay. Switch piezo section
+            } else if (ButtonStateCounter >= 8 && ButtonStateCounter <= 10) { //Range here to get a reasonable delay. Switch piezo section
                 if (!digitalRead(PUSHBUTTON))  {
                     lcd.clear();
                     lcd.setCursor(0, 0); //first line
@@ -304,7 +303,7 @@ void loop() {
                     ButtonStateCounter = 0;
                 }
 
-            } else if (ButtonStateCounter == 8  || ButtonStateCounter == 9) { //Range here to get a reasonable delay. Switch bluetooth section
+            } else if (ButtonStateCounter >= 11 && ButtonStateCounter <= 13) { //Range here to get a reasonable delay. Switch bluetooth section
                 if (!digitalRead(PUSHBUTTON))  {  //button is held down, just update display
                     lcd.clear();
                     lcd.setCursor(0, 0); //first line
@@ -319,7 +318,7 @@ void loop() {
                     if (bluetoothenabled) lcd.print("Enabled "); else lcd.print("Disabled");
                     ButtonStateCounter = 0;
                 }
-            } else if (ButtonStateCounter == 10  || ButtonStateCounter == 11) { //Range here to get a reasonable delay. Switch bluetooth section
+            } else if (ButtonStateCounter >= 14 && ButtonStateCounter <= 16) { //Range here to get a reasonable delay. Switch bluetooth section
                 if (!digitalRead(PUSHBUTTON))  {  //button is held down, just update display
                     lcd.clear();
                     lcd.setCursor(0, 0); //first line
@@ -334,16 +333,16 @@ void loop() {
                     backlightautooffcounter = 0;
                     ButtonStateCounter = 0;
                 }
-            } else if (ButtonStateCounter > 12)  {  //catch all, indicate end of menu/no change. adjust value according to above choices
+            } else if (ButtonStateCounter > 17)  {  //catch all, indicate end of menu/no change. adjust value according to above choices
                 if (!digitalRead(PUSHBUTTON))  {  //button is held down, just update display
                     lcd.clear();
                     lcd.setCursor(0, 0); //first line
                     lcd.print("End of menu");
-                    lcd.setCursor(2, 1); //second line
-                    lcd.print("Clock here?");
+                    lcd.setCursor(0, 1); //second line
+                    lcd.print("Release button");
                 } else { //button released while here, indicate by changing second line
                     lcd.setCursor(0, 1); //second line3
-                    lcd.print("Waiting read   ");
+                    lcd.print("Waiting read    ");
                     ButtonStateCounter = 0;
                 }
             } //end long if/else chain

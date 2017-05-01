@@ -10,25 +10,32 @@
     Softserial for bluetooth mobile reporting. Uses pin 11=RX, 12=TX (RX not in use for now). Select app below
      Format required by app:  Evalue1,value2,value3...\n. Data sent are: cpm,usv_average,usv_accumulated
      Using HC-06 bt device, usually pairing passcode is 1234.
+     Power controlled via transistor on pin BTTRANSISTOR (to turn fully off).
     External 5 LED row indicator support with fade for increased resolution. See threshold definitions below.
-    LCD support I2C, A4=SDA, A5=SCL. 
-     Pin A0 for button (Internal pullup). Events: 
-         Short push,  switch LCD backlight on/off.  
-         Medium hold: Show battery voltage
-         Long hold: Swap piezo (pin 13) on/off. See piezo volume definition below,
+    LCD support I2C, A4=SDA, A5=SCL.
+    Pin A0 for button (Internal pullup). Events:
+         Short push,  switch LCD backlight on/off.
+         Hold button: Cycle through: VCC voltage, piezo on/off, Piezo volume, Bluetooth, (end/no change). Release at piezo/bluetooth to change state/volume.
+    Persistent values stored in EEPROM:
+      Piezo state (adress 0)
+      Piezo volume (adress 1)
+      Bluetooth power-pin on/off (adress 2)
+      Backlight auto power off (adress 3)
 
     TODO - auto timeout for LCD backlight?
+    TODO: Expand button menu (clear accumulated, powersave(backlight timeout),  etc)
 
     Misc bloat ideas:.
       TODO: HWmod Store to SD card?
       TODO: HWmod RTC clock for logging
 
 */
-//Serial adaptation mobile app, uncomment one 
+//Serial adaptation mobile app, uncomment one
 #define app_btgraphics //Adapted for app  "Bluetooth Terminal/Graphics" by Emrecan ÇETİN. 
 //#define app_ezplotter  //Adapted for ezPlotter by i2A systems
 
 #include <Wire.h>
+#include <EEPROM.h>
 #include <LiquidCrystal_I2C.h>
 #include <SoftwareSerial.h>
 // initialize the library with the numbers of the interface pins
@@ -37,20 +44,28 @@ SoftwareSerial btSerial(11, 12); // RX, TX for bluetooth adapter
 
 #define LOG_PERIOD 15000  //Logging period in milliseconds, recommended value 15000-60000. 
 #define MAX_PERIOD 60000  //Maximum logging period without modifying this sketch
-#define BACKLIGHTBUTTON A0 //pushbutton to switch backlight. remember pull down resistor.
-#define PIEZOVOLUME 20 //10-80 seems OK range, Controls microeconds pulse duration to piezo. More than 80 probably no effect since pin already are fully on.
+#define BACKLIGHTAUTOOFF 4  //Max 255. If enabled, auto off timer. Number of LOG_PERIOD cycles before turning off (no ned for separate millis check here).
+#define PUSHBUTTON A0 //pushbutton to switch backlight. remember pull down resistor.
+#define PIEZOPIN 7 //Pin for piezo "pings"
+#define BTTRANSISTOR 4 //Pin for bluetooth enable (I've used NPN transitor for gnd enable)
 
 #define USV_CONVERSION 123.147092360319  //conversion factor for J305 tube. Factor: 0.00812037037037
 //link to data for J305: https://www.cooking-hacks.com/documentation/tutorials/geiger-counter-radiation-sensor-board-arduino-raspberry-pi-tutorial/
 //#define USV_CONVERSION 151.5 //for M4011 tube,
 //#define USV_CONVERSION 175.43 //for SBM-20 tube
 
+//Piezo volume levels. 10-80 seems OK range, Controls microeconds pulse duration to piezo. More than 80 probably no effect since pin already are fully on.
+#define PIEZOVOLUME1 5
+#define PIEZOVOLUME2 10
+#define PIEZOVOLUME3 20
+#define PIEZOVOLUME4 30
+
 // CPS threshold values for the led bar (resets 10 times pr sec),
-/*#define TH0 40
-#define TH1 80
-#define TH2 120
-#define TH3 160
-#define TH4 200
+/*  #define TH0 40
+    #define TH1 80
+    #define TH2 120
+    #define TH3 160
+    #define TH4 200
 */
 //DEBUG VALUES - only have low radiation source.
 #define TH0 4
@@ -73,41 +88,53 @@ unsigned long previousMillis;  //variable for time measurement
 unsigned long previousLedMillis;  //variable for time measurement LED barreset
 unsigned long debounceMillis;   // debounce time variable for input buttons
 int  ButtonStateCounter = 0;// hold counter.
-float usv_average = 0.20; //variable for uSv, starting with avg. 0.20 - roughly normal background radiation.
-float usv_average_old = 0.20; //variable for uSv last reading for LCD arrow, starting with avg. 0.20
+float usv_average = 0; //variable for uSv,
+float usv_average_old = 0; //variable for uSv last reading for LCD arrow, 0
 float usv_accumulated = 0; //variable.for accumulated since boot/reset
-boolean lcd_mode = 1; //used to swap LCD info
-boolean lcdbacklightstate = 1; //backlight state (on at boot)
-boolean piezoenabled = 1; //swap pin 13 (and onboard led) on event. Switched by holding button long.
-
+boolean lcd_mode = 1; //used to swap LCD info; TODO: Make this EEPROM value
+boolean lcdbacklightstate = 1; //backlight state (on at boot).
+boolean piezoenabled; //state of clcker, read from EEPROM adress 0
+byte piezovolume;//state of clcker, read from EEPROM adress 1
+boolean bluetoothenabled; //bluetooth enabled, EEPROM adress 2
+boolean backlightautooff; //backlight auto power off. EEPROm adress 4
+byte backlightautooffcounter = 0; //counter for backlight checks
 
 void setup() {
+    pinMode(PIEZOPIN, OUTPUT); //Piezo pin
+    pinMode(BTTRANSISTOR, OUTPUT); //Bluetooth power pin
+    //read values from EEPROM:
+    piezoenabled = EEPROM.read(0); //EEPROM adress 0
+    piezovolume = EEPROM.read(1); //EEPROM adress 1
+    bluetoothenabled = EEPROM.read(2); //EEPROM adress 2
+    backlightautooff = EEPROM.read(3); //EEPROM adress 3
+    digitalWrite(PIEZOPIN, piezoenabled);
+    digitalWrite(BTTRANSISTOR, bluetoothenabled);
+    pinMode(13, OUTPUT); //Onboard LED
+    digitalWrite(13, LOW);
+    pinMode(PUSHBUTTON, INPUT_PULLUP);  //input push button for backlight switching
+    attachInterrupt(0, tube_impulse, FALLING);   //define external interrupt 0
+
     multiplier = MAX_PERIOD / LOG_PERIOD;      //calculating multiplier, depend on your log period
     Serial.begin(115200);
     btSerial.begin(9600);
     TWBR = 24; // 400kHz I2C clock (200kHz if CPU is 8MHz)
-    attachInterrupt(0, tube_impulse, FALLING);   //define external interrupt 0
 
     ledFade(TH4 - 1); //all on LEDBAR
 
-    lcd.init();                      // initialize the lcd
+    lcd.init();                    
     lcd.backlight();
     lcd.setCursor(0, 0);
     lcd.print("Radiation Sensor");
     lcd.setCursor(2, 1);
     lcd.print("Please wait");
 
-    pinMode(BACKLIGHTBUTTON, INPUT_PULLUP);  //input push button for backlight switching
-
-    //flash onboard led to indicate setup done
-    pinMode(13, OUTPUT);
-    digitalWrite(13, HIGH);
-    delay(1500);
+    //flash ledrange
+    delay(100);
     ledFade(TH2 - 1); //ledbar medium
-    digitalWrite(13, LOW);
-    delay(1000);
-
+    digitalWrite(13, HIGH);
+    delay(100);
     ledFade(0); //zero ledbar
+    digitalWrite(13, LOW);
 
     Serial.println("Arduino setup complete");
 }
@@ -125,38 +152,40 @@ void loop() {
         usv_average = ((usv_average * 9 + usv) / 10);
         usv_accumulated = usv_accumulated + (usv / (MAX_PERIOD / LOG_PERIOD)) / 60; //accumulated since boot/reset
 
-        lcd.clear();
-        lcd.setCursor(0, 0);
-        if (lcd_mode) { //swaps between two LCD infos on first line
-            if (cpm < 10) lcd.print(" "); //add spaces to avoid jumping on 1, 10 digit numbers
-            if (cpm < 100) lcd.print(" ");
-            if (cpm < 1000) lcd.print(" ");
-            lcd.print(cpm);
-            lcd.print("cpm");
-            lcd.setCursor(8, 0);
-            lcd.print(usv, 2);
+        if (digitalRead(PUSHBUTTON)) { //LCD update section. Check if button down to not interfere with menu
+            lcd.clear();
+            lcd.setCursor(0, 0);
+            if (lcd_mode) { //swaps between two LCD infos on first line
+                if (cpm < 10) lcd.print(" "); //add spaces to avoid jumping on 1, 10 digit numbers
+                if (cpm < 100) lcd.print(" ");
+                if (cpm < 1000) lcd.print(" ");
+                lcd.print(cpm);
+                lcd.print("cpm");
+                lcd.setCursor(8, 0);
+                lcd.print(usv, 2);
+                lcd.print((char)228); //special char µ
+                lcd.print("Sv");
+                lcd_mode = 0;
+            } else {
+                lcd.print(" ");
+                lcd.print((char)228); //special char µ
+                lcd.print("Sv acc: ");
+                lcd.print(usv_accumulated);
+                lcd_mode = 1;
+            }
+            lcd.setCursor(0, 1); //second line
+            if (usv_average > usv_average_old) {
+                lcd.print((char)126); //special char, right arrow (rom missing up)
+            } else if (usv_average < usv_average_old) {
+                lcd.print((char)127); //special char, left arrow (rom missing down)
+            }  else {
+                lcd.print(" "); //no change, space only
+            }
+            lcd.print(usv_average, 3);
             lcd.print((char)228); //special char µ
-            lcd.print("Sv");
-            lcd_mode = 0;
-        } else {
-            lcd.print(" ");
-            lcd.print((char)228); //special char µ
-            lcd.print("Sv acc: ");
-            lcd.print(usv_accumulated);
-            lcd_mode = 1;
-        }
-        lcd.setCursor(0, 1); //second line
-        if (usv_average > usv_average_old) {
-            lcd.print((char)126); //special char, right arrow (rom missing up)
-        } else if (usv_average < usv_average_old) {
-            lcd.print((char)127); //special char, left arrow (rom missing down)
-        }  else {
-            lcd.print(" "); //no change, space only
-        }
-        lcd.print(usv_average, 3);
-        lcd.print((char)228); //special char µ
-        lcd.print("Sv/h avg");
-        usv_average_old = usv_average; //update with last reading
+            lcd.print("Sv/h avg");
+            usv_average_old = usv_average; //update with last reading
+        } //END LCD update section
 
         //USB serial
         Serial.print("cpm: ");
@@ -189,6 +218,14 @@ void loop() {
         btSerial.println(usv_accumulated);
 #endif
 
+        //check if backlight auto off is enabled. If true update timer and change value.
+        if (backlightautooff && lcdbacklightstate) {
+            if (backlightautooffcounter < BACKLIGHTAUTOOFF) backlightautooffcounter++;
+            else { //reached counter value. Turn off backlight
+                lcd.noBacklight(); // turn off backlight
+                lcdbacklightstate = 0;
+            }
+        } 
         counts = 0;
     } //END LCD, bluetooth and serial output/updates section
 
@@ -196,53 +233,121 @@ void loop() {
     if (currentMillis - previousLedMillis > 200) { //run x times pr second
         previousLedMillis = currentMillis;
         //calculate fading effect. Not super accurate to get an "analog feel" perhaps
-        if (ledcps >= ledfadecps) ledfadecps=ledcps; else ledfadecps=ledfadecps/1.5+ledcps; 
-        ledFade(ledfadecps); 
+        if (ledcps >= ledfadecps) ledfadecps = ledcps; else ledfadecps = ledfadecps / 1.5 + ledcps;
+        ledFade(ledfadecps);
         ledcps = 0; //reset counter
     } //END Ledbar section
 
-    //Button event section
-    if (currentMillis - debounceMillis > 500 || (!digitalRead(BACKLIGHTBUTTON) && !ButtonStateCounter)) {  //check interval. Or check here to catch early press
-        debounceMillis = currentMillis; // reset counter
-        if (!digitalRead(BACKLIGHTBUTTON)) ButtonStateCounter++; // Button is held down, increase button counter
-
-        //button release events. Checks counter to do stuff
-        if (digitalRead(BACKLIGHTBUTTON) && ButtonStateCounter == 1) { //Button state counter larger than 0, and button is released.
-            if (lcdbacklightstate) {
-                lcd.noBacklight(); // turn off backlight
-                lcdbacklightstate = 0; debounceMillis;
-            } else {
-                lcd.backlight(); // turn on backlight.
+    //Button check and LCD/parameter update section. On millis interval.
+    if (currentMillis - debounceMillis > 500) {  //check interval. || check here is to catch early press.
+        if (!digitalRead(PUSHBUTTON)) { // Button is held down, increase button counter and turn on backlight if off
+            ButtonStateCounter++;
+            debounceMillis = currentMillis; // reset counter
+        }
+        //button hold and release events. Checks counter and button state to do stuff
+        if (ButtonStateCounter > 0) {
+            if (ButtonStateCounter == 1) { //Just short press. Switch baclkight.
+                if (digitalRead(PUSHBUTTON)) { //button released while here
+                    if (lcdbacklightstate) {
+                        lcd.noBacklight(); // turn off backlight
+                        lcdbacklightstate = 0;
+                    } else {
+                        lcd.backlight(); // turn on backlight.
+                        lcdbacklightstate = 1;
+                        backlightautooffcounter = 0; //reset backlight auto off counter
+                    }
+                    ButtonStateCounter = 0;
+                }
+            } else if (ButtonStateCounter == 2 || ButtonStateCounter == 3) {  //long press events from here. Range to get a reasonable delay. Backlight turned on always from here on out.
+                float vccread = readVcc();
+                vccread = vccread / 1000; //convert from mv to V
+                lcd.backlight();
                 lcdbacklightstate = 1;
-            }
-        }
-        //below here will cycle forwards while button is held down. 
-        if (ButtonStateCounter == 2)  {  //long press 1. Just do show battery level. Do not reset counter here, done below when button released.
-            float vccread = readVcc();
-            vccread = vccread / 1000; //convert from mv to V
-            lcd.backlight(); // turn on backlight in case it is off
-            lcdbacklightstate = 1;
-            lcd.clear();
-            lcd.setCursor(0, 0); //first line
-            lcd.print("Battery Voltage:");
-            lcd.setCursor(2, 1); //second line
-            lcd.print(vccread);
-            lcd.print("V ");
-            ButtonStateCounter++; //increased one to avoid risk being done twice when key released
-        }
-        if (ButtonStateCounter == 5)  {  //long press 2. Swap piezoenabled booleand and inform on LCD
-            piezoenabled=!piezoenabled;
-            lcd.backlight(); // turn on backlight in case it is off
-            lcdbacklightstate = 1;
-            lcd.clear();
-            lcd.setCursor(0, 0); //first line
-            lcd.print("Piezo buzzer:");
-            lcd.setCursor(2, 1); //second line
-            if (piezoenabled) lcd.print("ON"); else lcd.print("OFF");
-            ButtonStateCounter++; //increased one to avoid risk being done twice when key released
-        }
-        //Might add more stuff here for event 4, 6, 8 etc to count through every 2. sec..
-        if (digitalRead(BACKLIGHTBUTTON)) ButtonStateCounter = 0; // Cleanup and reset button counter. Events handled above.
+                lcd.clear();
+                lcd.setCursor(0, 0); //first line
+                lcd.print("Battery Voltage:");
+                lcd.setCursor(2, 1); //second line
+                lcd.print(vccread);
+                lcd.print("V ");
+                if (digitalRead(PUSHBUTTON)) ButtonStateCounter = 0; //button released while here
+            } else if (ButtonStateCounter == 4  || ButtonStateCounter == 5) { //Range here to get a reasonable delay. Switch piezo section
+                if (!digitalRead(PUSHBUTTON))  {
+                    lcd.clear();
+                    lcd.setCursor(0, 0); //first line
+                    lcd.print("Piezo clicker:");
+                    lcd.setCursor(2, 1); //second line
+                    if (piezoenabled) lcd.print("ON "); else lcd.print("OFF");
+                } else { //button released while here, change value, update EEPROM
+                    piezoenabled = !piezoenabled;
+                    eepromWrite(0, piezoenabled); //store value in eerpom
+                    lcd.setCursor(2, 1); //second line
+                    if (piezoenabled) lcd.print("ON "); else lcd.print("OFF");
+                    ButtonStateCounter = 0;
+                }
+
+            } else if (ButtonStateCounter == 6  || ButtonStateCounter == 7) { //Range here to get a reasonable delay. Switch piezo section
+                if (!digitalRead(PUSHBUTTON))  {
+                    lcd.clear();
+                    lcd.setCursor(0, 0); //first line
+                    lcd.print("Piezo volume:");
+                    lcd.setCursor(2, 1); //second line
+                    lcd.print(piezovolume);
+                } else { //button released while here, change value, update EEPROM
+                    if (piezovolume <= PIEZOVOLUME1) piezovolume = PIEZOVOLUME2; //smaller than to handle empty EEPROM value.
+                    else if (piezovolume == PIEZOVOLUME2) piezovolume = PIEZOVOLUME3;
+                    else if (piezovolume == PIEZOVOLUME3) piezovolume = PIEZOVOLUME4;
+                    else if (piezovolume >= PIEZOVOLUME4) piezovolume = PIEZOVOLUME1; //go back to 10, larger than if bugs..
+                    eepromWrite(1, piezovolume); //store value in eerpom
+                    lcd.setCursor(2, 1); //second line
+                    lcd.print(piezovolume);
+                    lcd.print("  ");//to clear out old values if going down to single digit
+                    ButtonStateCounter = 0;
+                }
+
+            } else if (ButtonStateCounter == 8  || ButtonStateCounter == 9) { //Range here to get a reasonable delay. Switch bluetooth section
+                if (!digitalRead(PUSHBUTTON))  {  //button is held down, just update display
+                    lcd.clear();
+                    lcd.setCursor(0, 0); //first line
+                    lcd.print("Bluetooth:");
+                    lcd.setCursor(2, 1); //second line
+                    if (bluetoothenabled) lcd.print("Enabled "); else lcd.print("Disabled");
+                } else { //button released while here, change value, update EEPROM
+                    bluetoothenabled = !bluetoothenabled;
+                    eepromWrite(2, bluetoothenabled); //store value in eerpom
+                    digitalWrite(BTTRANSISTOR, bluetoothenabled); //switch output pin
+                    lcd.setCursor(2, 1); //second line
+                    if (bluetoothenabled) lcd.print("Enabled "); else lcd.print("Disabled");
+                    ButtonStateCounter = 0;
+                }
+            } else if (ButtonStateCounter == 10  || ButtonStateCounter == 11) { //Range here to get a reasonable delay. Switch bluetooth section
+                if (!digitalRead(PUSHBUTTON))  {  //button is held down, just update display
+                    lcd.clear();
+                    lcd.setCursor(0, 0); //first line
+                    lcd.print("LCDlight autooff:");
+                    lcd.setCursor(2, 1); //second line
+                    if (backlightautooff) lcd.print("Enabled "); else lcd.print("Disabled");
+                } else { //button released while here, change value, update EEPROM
+                    backlightautooff = !backlightautooff;
+                    eepromWrite(3, backlightautooff); //store value in eerpom
+                    lcd.setCursor(2, 1); //second line
+                    if (backlightautooff) lcd.print("Enabled "); else lcd.print("Disabled");
+                    backlightautooffcounter = 0;
+                    ButtonStateCounter = 0;
+                }
+            } else if (ButtonStateCounter > 12)  {  //catch all, indicate end of menu/no change. adjust value according to above choices
+                if (!digitalRead(PUSHBUTTON))  {  //button is held down, just update display
+                    lcd.clear();
+                    lcd.setCursor(0, 0); //first line
+                    lcd.print("End of menu");
+                    lcd.setCursor(2, 1); //second line
+                    lcd.print("Clock here?");
+                } else { //button released while here, indicate by changing second line
+                    lcd.setCursor(0, 1); //second line3
+                    lcd.print("Waiting read   ");
+                    ButtonStateCounter = 0;
+                }
+            } //end long if/else chain
+        } //end if ButtonStateCounter > 0
     } //END Button event section
 } //END loop
 
@@ -252,13 +357,22 @@ void tube_impulse() {  //function for capturing interrupt events from Geiger Kit
     ledcps++;
     //switch state onboard led to indicate response
     //digitalWrite(13, !digitalRead(13));
-    
-    //"ping" pin 13 if piezoenabled. 
-     if (piezoenabled) {
-       digitalWrite(13, HIGH);
-       delayMicroseconds(PIEZOVOLUME); //Not ideal with blocking in here but some delay needed for audible. Longer duration=more volume)
-       digitalWrite(13, LOW);
-     }
+
+    //"ping" pin 13 if piezoenabled.
+    if (piezoenabled) {
+        digitalWrite(PIEZOPIN, HIGH);
+        delayMicroseconds(piezovolume); //Not ideal with blocking in here but some delay needed to be audible. (Longer duration=more volume)
+        digitalWrite(PIEZOPIN, LOW);
+    }
+}
+
+void eepromWrite(byte addr, byte value) { //function to check if diff value/update needed and disable interrupts while writing to EEPROM,
+    while (!eeprom_is_ready());
+    if (EEPROM.read(addr) != value) { //new value, update EEPROM
+        cli();
+        EEPROM.write(addr, value);
+        sei();
+    }
 }
 
 void ledFade(int value) { //function for 5x LED row update with fading effect for increased resolution.

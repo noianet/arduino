@@ -1,33 +1,35 @@
 /*
     GPL ref, based on https://github.com/majek/dump/blob/master/arduino/ard-01/geiger.pde
 
-    HW: Should add 10uF cap between gnd and reset to avoid reset when enabling serial.
+    Overall functionality:
+      Display alternates the first line with last CPM read and peak CPM read last 20 reads (#define below)
+      Second line shows arrow right/left  if uSv is indreasing or not, and averaged uSv calculation (10 reads)
 
-    Geiger counter details:
-    Geiger interrupt 0 (pin D2 on arduino mini - see attachInterrupt).
-    Serial USB output 115200. Indicates CPM, µSv og µSv average (floating average over 10 readings)
-     Example output: cpm: 20 uSv/h: 0.16 uSv/h avg: 0.17
-    Softserial for bluetooth mobile reporting. Uses pin 11=RX, 12=TX (RX not in use for now). Select app below
-     Format required by app:  Evalue1,value2,value3...\n. Data sent are: cpm,usv_average,usv_accumulated
-     Using HC-06 bt device, usually pairing passcode is 1234.
-     Power controlled via transistor on pin BTTRANSISTOR (to turn fully off).
-    External 5 LED row indicator support with fade for increased resolution. See threshold definitions below.
+    Geiger counter pin/physical details:
+      Geiger interrupt 0 (pin D2 on arduino mini - see attachInterrupt).
+      Serial USB output 115200. Indicates CPM, µSv og µSv average (floating average over 10 readings)
+        Example output: cpm: 20 uSv/h: 0.16 uSv/h avg: 0.17
+      Softserial for bluetooth mobile reporting. Uses pin 11=RX, 12=TX (RX not in use for now). Select app below
+       Format required by app:  Evalue1,value2,value3...\n. Data sent are: cpm,usv_average,usv_accumulated
+       Using HC-06 bt device, usually pairing passcode is 1234.
+    Power controlled via transistor on pin BTTRANSISTOR (to turn fully off).
+    External 5 LED row indicator support with fade for increased resolution. See threshold and pin definitions below.
     LCD support I2C, A4=SDA, A5=SCL.
     Pin A0 for button (Internal pullup). Events:
-         Short push,  switch LCD backlight on/off.
-         Hold button: Cycle through: VCC voltage, piezo on/off, Piezo volume, Bluetooth, (end/no change). Release at piezo/bluetooth to change state/volume.
+      Short push,  switch LCD backlight on/off.
+       Hold button: Cycle through: uSv accumulated since boot, VCC voltage, piezo on/off, Piezo volume, Bluetooth on/off, (end/no change). Release at piezo/bluetooth to change state/volume.
     Persistent values stored in EEPROM:
       Piezo state (adress 0)
       Piezo volume (adress 1)
       Bluetooth power-pin on/off (adress 2)
       Backlight auto power off (adress 3)
 
-    TODO - Move uSv accumulated to menu (first/before battery level)
-    TODO: replace uSv acc with highest CPM peak last 10 reads.
 
     Misc bloat ideas:.
       TODO: HWmod Store to SD card?
-      TODO: HWmod RTC clock for better logging
+      TODO: HWmod RTC clock for better logging.
+
+    HW: Should have a 10uF cap between gnd and reset to avoid reboot when enabling serial.
 
 */
 //Serial adaptation mobile app, uncomment one
@@ -167,7 +169,7 @@ void loop() {
           if (cpmPeakTable[i] > cpmPeak) cpmPeak = cpmPeakTable[i];
         }
 
-        //const float conversion_factor
+        //const float conversion_factor and uSv averaging
         float usv = (float)cpm / USV_CONVERSION;
         usv_average = ((usv_average * 9 + usv) / 10);
         usv_accumulated = usv_accumulated + (usv / (MAX_PERIOD / LOG_PERIOD)) / 60; //accumulated since boot/reset

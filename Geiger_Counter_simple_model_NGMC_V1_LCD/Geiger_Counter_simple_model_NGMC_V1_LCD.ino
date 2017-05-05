@@ -157,15 +157,14 @@ void loop() {
         previousMillis = currentMillis;
         cpm = counts * multiplier; //adjustable by constants
 
-        //CPM peak store and find
-        //add current value to CPM table
-        if (cpmPeakTableCounter < CPMSAMPLES)  cpmPeakTableCounter++; else cpmPeakTableCounter=0; //increase or reset counter
+        //CPM peak store and find highest value
+        //add current value to CPM table, roll over counter if at end of table
+        if (cpmPeakTableCounter < CPMSAMPLES-1) cpmPeakTableCounter++; else cpmPeakTableCounter = 0; //increase or reset counter
         cpmPeakTable[cpmPeakTableCounter] = cpm;      //add cpm to CPM peak store
-        
         //reset peak value and find highest
         cpmPeak=0;
         int i;
-        for (i = 0; i < CPMSAMPLES; i = i + 1) {
+        for (i = 0; i < CPMSAMPLES-1; i = i + 1) {
           if (cpmPeakTable[i] > cpmPeak) cpmPeak = cpmPeakTable[i];
         }
 

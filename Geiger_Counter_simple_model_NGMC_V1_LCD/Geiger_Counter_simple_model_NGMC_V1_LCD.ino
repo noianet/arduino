@@ -44,6 +44,7 @@ SoftwareSerial btSerial(11, 12); // RX, TX for bluetooth adapter
 
 #define LOG_PERIOD 15000  //Logging period in milliseconds, recommended value 15000-60000. 
 #define MAX_PERIOD 60000  //Maximum logging period without modifying this sketch
+#define CPMSAMPLES 20 //Used to store CPM over LOG_PERIOD for peak display. Max 255 (using byte)
 #define BACKLIGHTAUTOOFF 4  //Max 255. If enabled, auto off timer. Number of LOG_PERIOD cycles before turning off (no ned for separate millis check here).
 #define PUSHBUTTON A0 //pushbutton to switch backlight. remember pull down resistor.
 #define PIEZOPIN 7 //Pin for piezo "pings"
@@ -81,6 +82,9 @@ int ledArray [] = {3, 5, 6, 9, 10};
 // Variables
 unsigned long counts = 0;   //variable for GM Tube events
 unsigned long cpm = 0;      //variable for CPM
+unsigned int cpmPeakTable[CPMSAMPLES];      //variable for CPM peak store
+byte cpmPeakTableCounter=0;      //variable for CPM peak store
+unsigned int cpmPeak=0;      //used for result from CPM peak store
 unsigned long ledcps = 0;      //led counts pr. 10/second
 float ledfadecps = 0;      //for smoothing/fadeout
 unsigned int multiplier;  //variable for calculation CPM in this sketch
@@ -151,6 +155,22 @@ void loop() {
         previousMillis = currentMillis;
         cpm = counts * multiplier; //adjustable by constants
 
+        //CPM peak store and find
+        //add current value to CPM table
+        if (cpmPeakTableCounter < CPMSAMPLES)  cpmPeakTableCounter++; else cpmPeakTableCounter=0; //increase or reset counter
+        cpmPeakTable[cpmPeakTableCounter] = cpm;      //add cpm to CPM peak store
+        
+        //reset peak value and find highest
+        cpmPeak=0;
+        int i;
+        for (i = 0; i < CPMSAMPLES; i = i + 1) {
+          if (cpmPeakTable[i] > cpmPeak) cpmPeak = cpmPeakTable[i];
+        }
+        //DEBUG----------------------------------------------
+        /*Serial.print("DEBUG cpmpeak:");
+        Serial.print(cpmPeak);
+        Serial.print(" ");*/
+        //DEBUG---------------------------------------------- 
         //const float conversion_factor
         float usv = (float)cpm / USV_CONVERSION;
         usv_average = ((usv_average * 9 + usv) / 10);
@@ -171,12 +191,11 @@ void loop() {
                 lcd.print("Sv");
                 lcd_mode = 0;
             } else {
-                lcd.print(" ");
-                lcd.print((char)228); //special char µ
-                lcd.print("Sv acc: ");
-                lcd.print(usv_accumulated);
+                lcd.print("CPM Peak: ");
+                lcd.print(cpmPeak);
                 lcd_mode = 1;
             }
+            
             lcd.setCursor(0, 1); //second line
             if (usv_average > usv_average_old) {
                 lcd.print((char)126); //special char, right arrow (rom missing up)
@@ -262,7 +281,19 @@ void loop() {
                     }
                     ButtonStateCounter = 0;
                 }
-            } else if (ButtonStateCounter >= 2 && ButtonStateCounter <= 4) {  //long press events from here. Range to get a reasonable delay. Backlight turned on always from here on out.
+            } else if (ButtonStateCounter >= 1 && ButtonStateCounter <= 3) {  //long press events from here. Range to get a reasonable delay. Backlight turned on always from here on out.
+                //display accumulated
+                lcd.backlight();
+                lcdbacklightstate = 1;
+                lcd.clear();
+                lcd.setCursor(0, 0); //first line
+                lcd.print("Dose since boot:");
+                lcd.setCursor(2, 1); //second line
+                lcd.print(usv_accumulated);
+                lcd.print((char)228); //special char µ
+                lcd.print("Sv");
+                if (digitalRead(PUSHBUTTON)) ButtonStateCounter = 0; //button released while here                
+            } else if (ButtonStateCounter >= 4 && ButtonStateCounter <= 6) {  //long press events from here. Range to get a reasonable delay. Backlight turned on always from here on out.
                 float vccread = readVcc();
                 vccread = vccread / 1000; //convert from mv to V
                 lcd.backlight();
@@ -274,7 +305,7 @@ void loop() {
                 lcd.print(vccread);
                 lcd.print("V ");
                 if (digitalRead(PUSHBUTTON)) ButtonStateCounter = 0; //button released while here
-            } else if (ButtonStateCounter >= 5 && ButtonStateCounter <= 7) { //Range here to get a reasonable delay. Switch piezo section
+            } else if (ButtonStateCounter >= 7 && ButtonStateCounter <= 9) { //Range here to get a reasonable delay. Switch piezo section
                 if (!digitalRead(PUSHBUTTON))  {
                     lcd.clear();
                     lcd.setCursor(0, 0); //first line
@@ -288,7 +319,7 @@ void loop() {
                     if (piezoenabled) lcd.print("ON "); else lcd.print("OFF");
                     ButtonStateCounter = 0;
                 }
-            } else if (ButtonStateCounter >= 8 && ButtonStateCounter <= 10) { //Range here to get a reasonable delay. Switch piezo section
+            } else if (ButtonStateCounter >= 10 && ButtonStateCounter <= 12) { //Range here to get a reasonable delay. Switch piezo section
                 if (!digitalRead(PUSHBUTTON))  {
                     lcd.clear();
                     lcd.setCursor(0, 0); //first line
@@ -307,7 +338,7 @@ void loop() {
                     ButtonStateCounter = 0;
                 }
 
-            } else if (ButtonStateCounter >= 11 && ButtonStateCounter <= 13) { //Range here to get a reasonable delay. Switch bluetooth section
+            } else if (ButtonStateCounter >= 13 && ButtonStateCounter <= 15) { //Range here to get a reasonable delay. Switch bluetooth section
                 if (!digitalRead(PUSHBUTTON))  {  //button is held down, just update display
                     lcd.clear();
                     lcd.setCursor(0, 0); //first line
@@ -322,7 +353,7 @@ void loop() {
                     if (bluetoothenabled) lcd.print("Enabled "); else lcd.print("Disabled");
                     ButtonStateCounter = 0;
                 }
-            } else if (ButtonStateCounter >= 14 && ButtonStateCounter <= 16) { //Range here to get a reasonable delay. Switch bluetooth section
+            } else if (ButtonStateCounter >= 16 && ButtonStateCounter <= 18) { //Range here to get a reasonable delay. Switch bluetooth section
                 if (!digitalRead(PUSHBUTTON))  {  //button is held down, just update display
                     lcd.clear();
                     lcd.setCursor(0, 0); //first line
@@ -337,7 +368,7 @@ void loop() {
                     backlightautooffcounter = 0;
                     ButtonStateCounter = 0;
                 }
-            } else if (ButtonStateCounter > 17)  {  //catch all, indicate end of menu/no change. adjust value according to above choices
+            } else if (ButtonStateCounter > 19)  {  //catch all, indicate end of menu/no change. adjust value according to above choices
                 if (!digitalRead(PUSHBUTTON))  {  //button is held down, just update display
                     lcd.clear();
                     lcd.setCursor(0, 0); //first line
@@ -346,7 +377,7 @@ void loop() {
                     lcd.print("Release button");
                 } else { //button released while here, indicate by changing second line
                     lcd.setCursor(0, 1); //second line3
-                    lcd.print("Waiting read    ");
+                    lcd.print("Awaiting update ");
                     ButtonStateCounter = 0;
                 }
             } //end long if/else chain

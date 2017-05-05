@@ -82,19 +82,19 @@ int ledArray [] = {3, 5, 6, 9, 10};
 // Variables
 unsigned long counts = 0;   //variable for GM Tube events
 unsigned long cpm = 0;      //variable for CPM
-unsigned int cpmPeakTable[CPMSAMPLES];      //variable for CPM peak store
+unsigned long cpmPeakTable[CPMSAMPLES];      //variable for CPM peak store
 byte cpmPeakTableCounter=0;      //variable for CPM peak store
-unsigned int cpmPeak=0;      //used for result from CPM peak store
+unsigned long cpmPeak=0;      //used for result from CPM peak store
+float usv_average = 0; //variable for uSv,
+float usv_average_old = 0; //variable for uSv last reading for LCD arrow, 0
+float usv_accumulated = 0; //variable.for accumulated since boot/reset
 unsigned long ledcps = 0;      //led counts pr. 10/second
 float ledfadecps = 0;      //for smoothing/fadeout
-unsigned int multiplier;  //variable for calculation CPM in this sketch
+unsigned int multiplier;  //variable for CPM calculation, is result if MAX_PERIOD / LOG_PERIOD
 unsigned long previousMillis;  //variable for time measurement
 unsigned long previousLedMillis;  //variable for time measurement LED barreset
 unsigned long debounceMillis;   // debounce time variable for input buttons
 int  ButtonStateCounter = 0;// hold counter.
-float usv_average = 0; //variable for uSv,
-float usv_average_old = 0; //variable for uSv last reading for LCD arrow, 0
-float usv_accumulated = 0; //variable.for accumulated since boot/reset
 boolean lcd_mode = 1; //used to swap LCD info; TODO: Make this EEPROM value
 boolean lcdbacklightstate = 1; //backlight state (on at boot).
 boolean piezoenabled; //state of clcker, read from EEPROM adress 0
@@ -166,11 +166,7 @@ void loop() {
         for (i = 0; i < CPMSAMPLES; i = i + 1) {
           if (cpmPeakTable[i] > cpmPeak) cpmPeak = cpmPeakTable[i];
         }
-        //DEBUG----------------------------------------------
-        /*Serial.print("DEBUG cpmpeak:");
-        Serial.print(cpmPeak);
-        Serial.print(" ");*/
-        //DEBUG---------------------------------------------- 
+
         //const float conversion_factor
         float usv = (float)cpm / USV_CONVERSION;
         usv_average = ((usv_average * 9 + usv) / 10);
@@ -216,11 +212,14 @@ void loop() {
         //if (cpm < 100) Serial.print(" "); //adds extra space if single digit to clean up formatting
         //if (cpm < 1000) Serial.print(" "); //adds extra space if single digit to clean up formatting
         Serial.print(cpm);
-        Serial.print(" uSv/h: ");
+        Serial.print(" cpmpeak :");
+        if (cpmPeak < 10) Serial.print(" "); //adds extra space if single digit to clean up formatting
+        Serial.print(cpmPeak);
+        Serial.print(" uSv ");
         Serial.print(usv);
-        Serial.print(" uSv/h avg: ");
+        Serial.print(" uSv avg: ");
         Serial.print(usv_average);
-        Serial.print(" uSv/h acc: ");
+        Serial.print(" uSv acc: ");
         Serial.println(usv_accumulated, 4);
 
         //Bluetooth softserial, adapted for app

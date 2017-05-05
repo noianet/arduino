@@ -22,12 +22,12 @@
       Bluetooth power-pin on/off (adress 2)
       Backlight auto power off (adress 3)
 
-    TODO - auto timeout for LCD backlight?
-    TODO: Expand button menu (clear accumulated, powersave(backlight timeout),  etc)
+    TODO - Move uSv accumulated to menu (first/before battery level)
+    TODO: replace uSv acc with highest CPM peak last 10 reads.
 
     Misc bloat ideas:.
       TODO: HWmod Store to SD card?
-      TODO: HWmod RTC clock for logging
+      TODO: HWmod RTC clock for better logging
 
 */
 //Serial adaptation mobile app, uncomment one
@@ -55,10 +55,10 @@ SoftwareSerial btSerial(11, 12); // RX, TX for bluetooth adapter
 //#define USV_CONVERSION 175.43 //for SBM-20 tube
 
 //Piezo volume levels. 10-80 seems OK range, Controls microeconds pulse duration to piezo. More than 80 probably no effect since pin already are fully on.
-#define PIEZOVOLUME1 5
-#define PIEZOVOLUME2 10
-#define PIEZOVOLUME3 20
-#define PIEZOVOLUME4 30
+#define PIEZOVOLUME1 30//5
+#define PIEZOVOLUME2 60 //10
+#define PIEZOVOLUME3 80 //20
+#define PIEZOVOLUME4 100 //30
 
 // CPS threshold values for the led bar (resets 10 times pr sec),
 /*  #define TH0 40
@@ -130,8 +130,12 @@ void setup() {
 
     //flash ledrange
     delay(100);
+    ledFade(TH3 - 1); //ledbar medium
+    delay(100);
     ledFade(TH2 - 1); //ledbar medium
-    digitalWrite(13, HIGH);
+    delay(100);
+    ledFade(TH1 - 1); //ledbar medium
+    digitalWrite(13, HIGH); //flash onboard led
     delay(100);
     ledFade(0); //zero ledbar
     digitalWrite(13, LOW);

@@ -2,7 +2,7 @@
     GPL ref, based on https://github.com/majek/dump/blob/master/arduino/ard-01/geiger.pde
 
     Overall functionality:
-      Display alternates the first line with last CPM read and peak CPM read last 20 reads (#define below)
+      LCD first line alternates with last CPM read and uSv calculation, and peak high/low CPM read last 20 reads (#define sample number below)
       Second line shows arrow right/left  if uSv is indreasing or not, and averaged uSv calculation (10 reads)
 
     Geiger counter pin/physical details:
@@ -86,7 +86,9 @@ unsigned long counts = 0;   //variable for GM Tube events
 unsigned long cpm = 0;      //variable for CPM
 unsigned long cpmPeakTable[CPMSAMPLES];      //variable for CPM peak store
 byte cpmPeakTableCounter=0;      //variable for CPM peak store
-unsigned long cpmPeak=0;      //used for result from CPM peak store
+boolean firstrunTable=1; //a bit overkill perhaps.. Used to ignore zero values on first round (rare, except when not fully populated table..).
+unsigned long cpmPeakHigh;      //used for result from CPM peak store
+unsigned long cpmPeakLow;      //used for result from CPM peak store
 float usv_average = 0; //variable for uSv,
 float usv_average_old = 0; //variable for uSv last reading for LCD arrow, 0
 float usv_accumulated = 0; //variable.for accumulated since boot/reset
@@ -159,13 +161,15 @@ void loop() {
 
         //CPM peak store and find highest value
         //add current value to CPM table, roll over counter if at end of table
-        if (cpmPeakTableCounter < CPMSAMPLES-1) cpmPeakTableCounter++; else cpmPeakTableCounter = 0; //increase or reset counter
+        if (cpmPeakTableCounter < CPMSAMPLES) cpmPeakTableCounter++; else {cpmPeakTableCounter = 0; firstrunTable=0;}//increase or reset counter, if reset flag populated table
         cpmPeakTable[cpmPeakTableCounter] = cpm;      //add cpm to CPM peak store
-        //reset peak value and find highest
-        cpmPeak=0;
+        //reset peak values and find highest/lowest in table
+        cpmPeakHigh=0;
+        cpmPeakLow=999999;
         int i;
-        for (i = 0; i < CPMSAMPLES-1; i = i + 1) {
-          if (cpmPeakTable[i] > cpmPeak) cpmPeak = cpmPeakTable[i];
+        for (i = 0; i < CPMSAMPLES; i++) {
+          if (cpmPeakTable[i] > cpmPeakHigh) cpmPeakHigh = cpmPeakTable[i];
+          if ((cpmPeakTable[i] < cpmPeakLow)  && (!(firstrunTable && cpmPeakTable[i]  == 0))) cpmPeakLow = cpmPeakTable[i]; //ignore zero values first run (not fully populated table).
         }
 
         //const float conversion_factor and uSv averaging
@@ -188,8 +192,10 @@ void loop() {
                 lcd.print("Sv");
                 lcd_mode = 0;
             } else {
-                lcd.print("CPM Peak: ");
-                lcd.print(cpmPeak);
+                lcd.print("CPMpk: ");
+                lcd.print(cpmPeakHigh);
+                lcd.print("/");
+                lcd.print(cpmPeakLow);
                 lcd_mode = 1;
             }
             
@@ -214,8 +220,9 @@ void loop() {
         //if (cpm < 1000) Serial.print(" "); //adds extra space if single digit to clean up formatting
         Serial.print(cpm);
         Serial.print(" cpmpeak :");
-        if (cpmPeak < 10) Serial.print(" "); //adds extra space if single digit to clean up formatting
-        Serial.print(cpmPeak);
+        Serial.print(cpmPeakHigh);
+        Serial.print("/");
+        Serial.print(cpmPeakLow);
         Serial.print(" uSv ");
         Serial.print(usv);
         Serial.print(" uSv avg: ");

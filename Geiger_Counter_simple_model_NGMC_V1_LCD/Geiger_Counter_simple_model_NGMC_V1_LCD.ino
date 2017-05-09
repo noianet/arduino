@@ -85,8 +85,7 @@ int ledArray [] = {3, 5, 6, 9, 10};
 unsigned long counts = 0;   //variable for GM Tube events
 unsigned long cpm = 0;      //variable for CPM
 unsigned long cpmPeakTable[CPMSAMPLES];      //variable for CPM peak store
-byte cpmPeakTableCounter=0;      //variable for CPM peak store
-boolean firstrunTable=1; //a bit overkill perhaps.. Used to ignore zero values on first round (rare, except when not fully populated table..).
+byte cpmPeakTableCounter=CPMSAMPLES;      //variable for CPM peak store. Start at end to force zero/roll-over to first slot.
 unsigned long cpmPeakHigh;      //used for result from CPM peak store
 unsigned long cpmPeakLow;      //used for result from CPM peak store
 float usv_average = 0; //variable for uSv,
@@ -159,17 +158,18 @@ void loop() {
         previousMillis = currentMillis;
         cpm = counts * multiplier; //adjustable by constants
 
-        //CPM peak store and find highest value
         //add current value to CPM table, roll over counter if at end of table
-        if (cpmPeakTableCounter < CPMSAMPLES) cpmPeakTableCounter++; else {cpmPeakTableCounter = 0; firstrunTable=0;}//increase or reset counter, if reset flag populated table
+        cpmPeakTableCounter++; 
+        if (cpmPeakTableCounter >= CPMSAMPLES) cpmPeakTableCounter=0; //Roll over counter if at end
         cpmPeakTable[cpmPeakTableCounter] = cpm;      //add cpm to CPM peak store
+        
         //reset peak values and find highest/lowest in table
         cpmPeakHigh=0;
         cpmPeakLow=999999;
         int i;
         for (i = 0; i < CPMSAMPLES; i++) {
           if (cpmPeakTable[i] > cpmPeakHigh) cpmPeakHigh = cpmPeakTable[i];
-          if ((cpmPeakTable[i] < cpmPeakLow)  && (!(firstrunTable && cpmPeakTable[i]  == 0))) cpmPeakLow = cpmPeakTable[i]; //ignore zero values first run (not fully populated table).
+          if (cpmPeakTable[i] < cpmPeakLow  && cpmPeakTable[i]  != 0) cpmPeakLow = cpmPeakTable[i]; //ignore zero value (boot/empty table, and real zero reads rare enough to just ignore)
         }
 
         //const float conversion_factor and uSv averaging

@@ -30,7 +30,7 @@ void setup() {
   delay(1000);
   digitalWrite(1,HIGH); //enable boost converter
   delay(1000); //to stabilize votages if needed
-  mySwitch.send(19, 24); 
+  mySwitch.send(19, 24);  //indicate boot
   //does not turn off transmitter here, will be handled further down
   delay(1000); //extra wait, just in case...
   

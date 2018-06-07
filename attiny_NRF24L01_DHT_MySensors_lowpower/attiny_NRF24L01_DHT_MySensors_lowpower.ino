@@ -113,10 +113,8 @@ void loop() {
             if (vccvoltage - oldvoltage > 1000.0 && vccvoltage - oldvoltage < -1000.0) { //if spike +/-1V re-read
                 delay(1000);
                 vccvoltage = readVcc(); //get VCC voltage, result is milivolt.
-                oldvoltage = vccvoltage;
-            } else {
-                oldvoltage = vccvoltage;
             }
+            oldvoltage = vccvoltage;
             gw.send(msgVolt.set((vccvoltage / 1000), 2));
             vcccounter = 1; //reset counter
         }

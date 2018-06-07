@@ -15,7 +15,6 @@
     "movespeed" variable adjusts valve opening angle from SERVOSTARTPOS, and can be controlled via serial input. Hard coced SERVORANGE for max opening angle from SERVOSTARTPOS.
     "wantpos" variable used for requested position. Can be controlled via POTMETERPIN (or if analogRead commented out in loop() directly via serial),
     No delays, millis used for serial output every LOG_PERIOD ms. Initial benchmarking on an Arduino nano gives 1300 loops/sec.
-    NBNB: Fill servo reversing angle.
     stopactuator() function:
     Will run if emergencypin not pulled to ground. Sets all servos to -20 deg. Delay 1000ms with serial prompt,
     bleedactuator() function:
@@ -32,7 +31,6 @@
 */
 #include <Wire.h>
 #include <VL53L0X.h> //https://github.com/pololu/vl53l0x-arduino
-#include <MovingAverage.h> //https://github.com/sofian/MovingAverage
 #include <LiquidCrystal_I2C.h>
 #include <Servo.h>
 #define LOG_PERIOD 1000  //Serial output logging period in milliseconds.
@@ -53,13 +51,13 @@
 #define MINLENGTH 60 //min stroke position in mm. Is used as zero point. Related to position sensor positioning.
 #define STROKELENGTH 370 //max stroke length in mm from MINLENGTH
 #define EFILLSERVOSTARTPOS 5 //zero position for valve servos.
-#define EFLUSHSERVOSTARTPOS 170 //zero position for valve servos. NB: Reversing.
-#define RFILLSERVOSTARTPOS 8 //zero position for valve servos.
-#define RFLUSHSERVOSTARTPOS 170 //zero position for valve servos. NB: Reversing.
+#define EFLUSHSERVOSTARTPOS 5 //zero position for valve servos. 
+#define RFILLSERVOSTARTPOS 5 //zero position for valve servos.
+#define RFLUSHSERVOSTARTPOS 5 //zero position for valve servos. 
 #define SERVORANGE 80 //max movement above startpos (diff from startpos). 
 #define BLEEDANGLE 20 //servo angle for bleed actuator, higher for quicker pressure release
-#define HYSTERISIS 5 //hysterisis for position adjust. Larger value -> less small adjustments -> less power loss
-#define REDUCEDSPEEDRANGE 15//Movespeed halved when inside +/- REDUCEDSPEEDRANGE from wantpos. Envelopes HYSTERISIS
+#define HYSTERISIS 3 //hysterisis for position adjust. Larger value -> less small adjustments -> less power loss
+#define REDUCEDSPEEDRANGE 30//Movespeed halved when inside +/- REDUCEDSPEEDRANGE from wantpos. Envelopes HYSTERISIS
 
 //section definitions. Uncomment if connected. LCD cost: 1 loop/sec.
 //#define HAVELCD
@@ -80,10 +78,9 @@ LiquidCrystal_I2C lcd(0x3F, 20, 4); // set the LCD address to 0x3F for a 16 char
 unsigned long previousMillis;  //variable for time measurement
 unsigned int wantpos = 0; //adjusted by serial input and potmeter.
 unsigned int movespeed = 15; //adjusted by serial input. Sets valve opening factor (servo angle from SERVOSTARTPOS).
-unsigned int minimumpressure = 120; //adjusted by serial input., ideal working pressure. Atmospheric about 100 on test sensor. Set ex 50 to go atmospheric,
-MovingAverage havepostable(6); //read samples for averaging.
-int havepos; //populated from stack average (optimization for single calculation/loop)
-int haveposlidar; //used for sanity check lidar read before adding to stack. Had some large peaks.
+unsigned int minimumpressure = 150; //adjusted by serial input., ideal working pressure. Atmospheric about 100 on test sensor. Set ex 50 to go atmospheric,
+int havepos; //populated from lidar read;
+int haveposlidar; //used for sanity check lidar rand debugging Had some large peaks.
 
 //read some sensor values
 int extendpressure = analogRead(EPNEUMATICPIN);
@@ -95,14 +92,15 @@ void setup()
     Serial.begin(115200);
     Serial.setTimeout(10); //avoid long blocking wait for serial event.
     Wire.begin();
-    //TWBR = 24; // 400kHz I2C clock (200kHz if CPU is 8MHz)
-    Wire.setClock(400000);
+    TWBR = 24; // 400kHz I2C clock (200kHz if CPU is 8MHz)
+    //Wire.setClock(100000);
 
+#ifdef HAVELCD
     lcd.init();
     lcd.backlight();
     lcd.setCursor(4, 0);
     lcd.print("Startup");
-
+#endif
     //attach servos and set to closed position
     eservofill.attach(ESERVOPINFILL);
     eservoflush.attach(ESERVOPINFLUSH);
@@ -112,18 +110,27 @@ void setup()
 
     //initialise lidar
     Serial.print("Probe I2C VL53L0X: ");
-
-    if (lidar.init()) {
+    lidar.init();
+    Serial.println(lidar.readRangeSingleMillimeters() ); 
+    if (lidar.readRangeSingleMillimeters() > 0) {
         lidar.setTimeout(500);
-        havepostable.reset(lidar.readRangeSingleMillimeters() - MINLENGTH);
-        havepos = havepostable.get() ;
+        havepos =lidar.readRangeSingleMillimeters() - MINLENGTH;
         Serial.print("Lidar found, measured range: ");
         Serial.println(havepos);
     } else {
+#ifdef HAVELCD
         lcd.clear();
         lcd.print("!LIDAR MISSING!");
+#endif
         Serial.println("ALERT: Lidar missing. Halting");
-        while (1) {}
+        Serial.print("Probe I2C VL53L0X result: ");
+        Serial.println(lidar.readRangeSingleMillimeters()) ;
+        while (1) { //blink onboard LED to indicate stop/error
+            digitalWrite(13, HIGH);
+            delay(200);          
+            digitalWrite(13, LOW);
+            delay(200);
+        }
     }
 
     //enable pullup for emergency read and bleed switch. Short emergency to ground to run actuator.
@@ -220,8 +227,7 @@ void runactuator() { //simple statemachine, operates by calls to position reads 
     //DEBUG/TODO: temp lock to bypass missing lidar. Remove comment==================================================
     haveposlidar = lidar.readRangeSingleMillimeters(); //read distance, adjusted for defined minimum length to set zero point. Own variable for debugging
     if (haveposlidar > (MINLENGTH + STROKELENGTH + 50)) haveposlidar = MINLENGTH + STROKELENGTH; //sanitycheck lidar. Cap if way off
-    havepostable.update(haveposlidar - MINLENGTH);
-    havepos = havepostable.get(); //get averaged value
+    havepos = haveposlidar  - MINLENGTH;
     //DEBUG/TODO: temp lock to bypass missing lidar==================================================
     extendpressure = analogRead(EPNEUMATICPIN); //pressure on extend line
     retractpressure = analogRead(RPNEUMATICPIN); //pressure on retract line
@@ -233,65 +239,61 @@ void runactuator() { //simple statemachine, operates by calls to position reads 
         rservofill.write(RFILLSERVOSTARTPOS); //close input on retract line
         eservoflush.write(EFLUSHSERVOSTARTPOS); //close flush on extend line
         //check if above minimum pressure on retract line, eject air if is, else close
-        if (retractpressure > minimumpressure && (wantpos-havepos) > REDUCEDSPEEDRANGE) { //move at indicated speed, outside REDUCEDSPEEDRANGE and flush at OK pressure.
-            eservofill.write(EFILLSERVOSTARTPOS + movespeed); 
-            rservoflush.write(RFLUSHSERVOSTARTPOS - movespeed);
-        } else if (retractpressure > minimumpressure && (wantpos-havepos) < REDUCEDSPEEDRANGE) { //inside REDUCEDSPEEDRANGE, half speed. Flush at OK pressure
-            eservofill.write(EFILLSERVOSTARTPOS + movespeed/2); 
-            rservoflush.write(RFLUSHSERVOSTARTPOS - movespeed/2);         
-        } else if (retractpressure <= minimumpressure && (wantpos-havepos) < REDUCEDSPEEDRANGE) { //inside REDUCEDSPEEDRANGE, half speed. Flush at low pressure (close)
-            eservofill.write(EFILLSERVOSTARTPOS + movespeed/2); 
+        if (retractpressure > minimumpressure && (wantpos - havepos) > REDUCEDSPEEDRANGE) { //move at indicated speed, outside REDUCEDSPEEDRANGE and flush at OK pressure.
+            eservofill.write(EFILLSERVOSTARTPOS + movespeed);
+            rservoflush.write(RFLUSHSERVOSTARTPOS + movespeed);
+        } else if (retractpressure > minimumpressure && (wantpos - havepos) < (REDUCEDSPEEDRANGE / 1.5)) { //inside REDUCEDSPEEDRANGE, half speed. Flush at OK pressure but halfway to pos, set 1/4 flush
+            eservofill.write(EFILLSERVOSTARTPOS + movespeed / 2);
+            rservoflush.write(RFLUSHSERVOSTARTPOS + movespeed / 4);
+        } else if (retractpressure > minimumpressure && (wantpos - havepos) < REDUCEDSPEEDRANGE) { //inside REDUCEDSPEEDRANGE, half speed. Flush at OK pressure
+            eservofill.write(EFILLSERVOSTARTPOS + movespeed / 2);
+            rservoflush.write(RFLUSHSERVOSTARTPOS + movespeed / 2);
+        } else if (retractpressure <= minimumpressure && (wantpos - havepos) < REDUCEDSPEEDRANGE) { //inside REDUCEDSPEEDRANGE, half speed. Flush at low pressure (close)
+            eservofill.write(EFILLSERVOSTARTPOS + movespeed / 2);
             rservoflush.write(RFLUSHSERVOSTARTPOS);
         } else {  //Else catches move at indicated speed, outside REDUCEDSPEEDRANGE, but flush at low pressure (close)
-            eservofill.write(EFILLSERVOSTARTPOS + movespeed); 
+            eservofill.write(EFILLSERVOSTARTPOS + movespeed);
             rservoflush.write(RFLUSHSERVOSTARTPOS);
         }
 
-    //Retract section
+        //Retract section
     } else if (((havepos - HYSTERISIS) > wantpos) && (havepos > 0)) { //need to retract, check to avoid going below zero point defined by MINLENGTH
         eservofill.write(EFILLSERVOSTARTPOS); //close input on extend line
         rservoflush.write(RFLUSHSERVOSTARTPOS); //close flush on retract line
-    /*    rservofill.write(RFILLSERVOSTARTPOS + movespeed); //open fill on retract line
-        if (extendpressure > minimumpressure) { //check if above minimum pressure on extend line, eject air if is, else close
-            eservoflush.write(EFLUSHSERVOSTARTPOS - movespeed);
-        } else {
-            eservoflush.write(EFLUSHSERVOSTARTPOS);
-        }*/
-        //Retract section
-        if (extendpressure > minimumpressure && (havepos-wantpos) > REDUCEDSPEEDRANGE) { //move at indicated speed, outside REDUCEDSPEEDRANGE and flush at OK pressure.
-            rservofill.write(RFILLSERVOSTARTPOS + movespeed); 
-            eservoflush.write(EFLUSHSERVOSTARTPOS - movespeed);
-        } else if (extendpressure > minimumpressure && (havepos-wantpos) < REDUCEDSPEEDRANGE) { //inside REDUCEDSPEEDRANGE, half speed. Flush at OK pressure
-            rservofill.write(RFILLSERVOSTARTPOS + movespeed/2); 
-            eservoflush.write(EFLUSHSERVOSTARTPOS - movespeed/2);         
-        } else if (extendpressure <= minimumpressure && (havepos-wantpos) < REDUCEDSPEEDRANGE) { //inside REDUCEDSPEEDRANGE, half speed. Flush at low pressure (close)
-            rservofill.write(RFILLSERVOSTARTPOS + movespeed/2); 
+        //check if above minimum pressure on extend line, eject air if is, else close
+        if (extendpressure > minimumpressure && (havepos - wantpos) > REDUCEDSPEEDRANGE) { //move at indicated speed, outside REDUCEDSPEEDRANGE and flush at OK pressure.
+            rservofill.write(RFILLSERVOSTARTPOS + movespeed);
+            eservoflush.write(EFLUSHSERVOSTARTPOS + movespeed);
+        } else if (extendpressure > minimumpressure && (havepos - wantpos) < (REDUCEDSPEEDRANGE / 1.5)) { //inside REDUCEDSPEEDRANGE, half speed. Flush at OK pressure but halfway to pos, set 1/4 flush
+            rservofill.write(RFILLSERVOSTARTPOS + movespeed / 2);
+            eservoflush.write(EFLUSHSERVOSTARTPOS + movespeed / 4);
+        } else if (extendpressure > minimumpressure && (havepos - wantpos) < REDUCEDSPEEDRANGE) { //inside REDUCEDSPEEDRANGE, half speed. Flush at OK pressure
+            rservofill.write(RFILLSERVOSTARTPOS + movespeed / 2);
+            eservoflush.write(EFLUSHSERVOSTARTPOS + movespeed / 2);
+        } else if (extendpressure <= minimumpressure && (havepos - wantpos) < REDUCEDSPEEDRANGE) { //inside REDUCEDSPEEDRANGE, half speed. Flush at low pressure (close)
+            rservofill.write(RFILLSERVOSTARTPOS + movespeed / 2);
             eservoflush.write(EFLUSHSERVOSTARTPOS);
         } else {  //Else catches move at indicated speed, outside REDUCEDSPEEDRANGE, but flush at low pressure (close)
-            rservofill.write(RFILLSERVOSTARTPOS + movespeed); 
+            rservofill.write(RFILLSERVOSTARTPOS + movespeed);
             eservoflush.write(EFLUSHSERVOSTARTPOS);
         }
-
-
-
-        
     } else { //all good, close valves
         stopactuator();
     }
 } //end statemachine
 
-void stopactuator() { //sets all servos to a bit beyond closed position. startpos is just before opening.
+void stopactuator() { //sets all servos to closed position.
     eservofill.write(EFILLSERVOSTARTPOS);
     eservoflush.write(EFLUSHSERVOSTARTPOS);
     rservofill.write(RFILLSERVOSTARTPOS);
     rservoflush.write(RFLUSHSERVOSTARTPOS);
 }
 
-void bleedactuator() { //slowly release pressure based on input (for shutdown)
+void bleedactuator() { //release pressure (for shutdown)
     eservofill.write(EFILLSERVOSTARTPOS);
-    eservoflush.write(EFLUSHSERVOSTARTPOS - BLEEDANGLE);
+    eservoflush.write(EFLUSHSERVOSTARTPOS + BLEEDANGLE);
     rservofill.write(RFILLSERVOSTARTPOS);
-    rservoflush.write(RFLUSHSERVOSTARTPOS - BLEEDANGLE);
+    rservoflush.write(RFLUSHSERVOSTARTPOS + BLEEDANGLE);
 }
 
 
@@ -311,9 +313,7 @@ void serialEvent() { //runs on interrupt hardware RX.
         }
 
         //sanitycheck on input:
-        if (wantpos > (STROKELENGTH)) {
-            wantpos = STROKELENGTH;   //asked for position beyond max
-        }
+        if (wantpos > (STROKELENGTH)) wantpos = STROKELENGTH;   //asked for position beyond max
         if (wantpos < 0) {
             wantpos = 0;   //asked for negative position
         }

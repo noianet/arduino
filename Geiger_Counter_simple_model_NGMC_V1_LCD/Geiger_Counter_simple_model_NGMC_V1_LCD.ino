@@ -39,23 +39,20 @@
 #include <Wire.h>
 #include <EEPROM.h>
 #include <LiquidCrystal_I2C.h>
-#include <SoftwareSerial.h>
-// initialize the library with the numbers of the interface pins
-LiquidCrystal_I2C lcd(0x3F, 20, 4);
-SoftwareSerial btSerial(11, 12); // RX, TX for bluetooth adapter
+#include <SendOnlySoftwareSerial.h>
 
 #define LOG_PERIOD 15000  //Logging period in milliseconds, recommended value 15000-60000. 
 #define MAX_PERIOD 60000  //Maximum logging period without modifying this sketch
-#define CPMSAMPLES 20 //Used to store CPM over LOG_PERIOD for peak display. Max 255 (using byte)
+#define CPMSAMPLES 20 //Number og CPM samples over LOG_PERIOD for peak display. Max 255 (using byte as counter)
 #define BACKLIGHTAUTOOFF 4  //Max 255. If enabled, auto off timer. Number of LOG_PERIOD cycles before turning off (no ned for separate millis check here).
 #define PUSHBUTTON A0 //pushbutton to switch backlight. remember pull down resistor.
 #define PIEZOPIN 7 //Pin for piezo "pings"
-#define BTTRANSISTOR 4 //Pin for bluetooth enable (I've used NPN transitor for gnd enable)
+#define BTTRANSISTOR 11 //Pin for bluetooth enable (I've used NPN transitor for gnd enable)
 
-#define USV_CONVERSION 123.147092360319  //conversion factor for J305 tube. Factor: 0.00812037037037
+//#define USV_CONVERSION 123.147092360319  //conversion factor for J305 tube. Factor: 0.00812037037037
 //link to data for J305: https://www.cooking-hacks.com/documentation/tutorials/geiger-counter-radiation-sensor-board-arduino-raspberry-pi-tutorial/
 //#define USV_CONVERSION 151.5 //for M4011 tube,
-//#define USV_CONVERSION 175.43 //for SBM-20 tube
+#define USV_CONVERSION 175.43 //for SBM-20 tube. Factor: 0.0057
 
 //Piezo volume levels. 10-80 seems OK range, Controls microeconds pulse duration to piezo. More than 80 probably no effect since pin already are fully on.
 #define PIEZOVOLUME1 30//5
@@ -77,6 +74,9 @@ SoftwareSerial btSerial(11, 12); // RX, TX for bluetooth adapter
 #define TH3 16
 #define TH4 20
 
+// initialization I2C LCD and softwareserial
+LiquidCrystal_I2C lcd(0x3F, 20, 4);
+SendOnlySoftwareSerial btSerial(12); // TX for bluetooth adapter. 
 
 //Pins used for LED array. Must be PWM capable
 int ledArray [] = {3, 5, 6, 9, 10};

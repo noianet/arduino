@@ -20,7 +20,7 @@
 #define TEMPSENSORPIN A2 //physpin 3, A2, PB4
 #define SUPPLYVOLTAGE 1.1 //1.1V for internal reference. Adjust accordingly. Works best with 3.3v supply for ATTINY and TMP36
 #define SLEEPLOOP 10 //sleep loops before check/transmit. x*8s. Set to 80 in prod
-#define VCCREPORT 10 //report interval for battery voltage. Set to 100 for prod. Counter goes up 1 every tempreport.
+#define VCCREPORT 100 //report interval for battery voltage. Set to 100 for prod. Counter goes up 1 every tempreport.
 
 
 #ifdef DEBUG
@@ -30,8 +30,6 @@ TinyDebugSerial mySerial = TinyDebugSerial();
 #include <RCSwitch.h>
 RCSwitch radio = RCSwitch();
 #endif
-
-
 
 float temperature;
 float oldtemp = 20;
@@ -64,8 +62,8 @@ void setup() {
     mySerial.println("ATTINY boot");
 #else
     radio.send(99, 24); //indicate boot
-    delay(1000);
 #endif
+    delay(1000);
 }
 
 void loop() {
@@ -152,7 +150,8 @@ long readVcc() {
 
     long result = (high << 8) | low;
 
-    result = 1125300L / result; // Calculate Vcc (in mV); 1125300 = 1.1*1023*1000
+    //result = 1125300L / result; // Calculate Vcc (in mV); 1125300 = 1.1*1023*1000
+    result = 1126400L / result; // Calculate Vcc (in mV); 1126400 = 1.1*1024*1000
     return result; // Vcc in millivolts
 }
 

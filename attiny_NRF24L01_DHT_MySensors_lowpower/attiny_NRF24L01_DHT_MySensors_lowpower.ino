@@ -1,8 +1,6 @@
-
-//
 //                                      +-\/-+
-//                 Reset  PB5  1|o       |8  VCC/CE NRF24L01/4.7k pullup to PB4
-//  CSN NRF24L01 PB3  2|         |7  SCK     PB2
+//                 Reset  PB5  1|o       |8  VCC, CE NRF24L01 (tied high), 4.7k pullup to PB4 (for AM2320)
+//  CSN NRF24L01 PB3  2|         |7  SCK      PB2
 //             sensor    PB4  3|         |6  MOSI    PB1 (nb: MISO/MOSI flipped from pinout since is master)
 //                          GND  4|         |5  MISO    PB0 (nb: MISO/MOSI flipped from pinout since is master)
 //                                     +----+
@@ -12,17 +10,20 @@
     PB1   - MOSI
     PB2   - SCK
     PB3   - CSN (active low)
-    PB4   DHTxx, or AM2320 single wire mode, with sensor datapin + 4.7k pullup VCC
-    PB5 (Reset, port is set as input pullup). Shoud have an external 4.7 pullup as well from datasheet but not critical.
+    PB4  -   DHTxx, or AM2320 single wire mode, with sensor datapin. Must have a 4.7k pullup if using AM2320.
+    PB5 (Reset, port is set as input pullup to avoid floating). Shoud have an external 4.7 pullup as well from datasheet but not critical.
+Description:
+Simple, small and low power (14.5uAh sleep)  temp and humidity sensor. Using mysensors 1.4.x stack, but works fine with mysensors 2.2 gateways. 
+Using wake up/transmit temp/humidity every 10 min, and reports voltage every 30. Battery voltage calculated using Attiny internal 1.1v reference.
 */
 
 
-#define NODE_ID 20 //==========================CHANGE FOR EACH SENSOR=====================
+#define NODE_ID 24 //==========================CHANGE FOR EACH SENSOR=====================
 
 #include <avr/sleep.h>
 #include <avr/wdt.h>
 #include <avr/power.h>
-#define SLEEPLOOP 7 //75 //sleep loops before check/transmit. x*8s. Set to 75 in prod for ca 10 min
+#define SLEEPLOOP 75 //75 //sleep loops before check/transmit. x*8s. Set to 75 in prod for ca 10 min
 #define VCCREPORT 3 //report interval for battery voltage. Counter goes up 1 every tempreport. 
 #define CHECKLOOPMAX  7 //Recheck if it spikes more than +/-10. Using sleep(), 8s between each read, and when max reached giving up/accepting values.
 
@@ -94,10 +95,6 @@ void loop() {
             if ( (temperature == oldtemperature  && humidity == oldhumidity) ) { //if readings was OK, accept and break out, else re-read
                 break;
             }
-            if ( temperature  > 100.0 ) { //f.it.... reset and ignore, if passed checloop max and still insist its on fire just "lie" and send the old reading...Better than those 100+ spikes
-                temperature == oldtemperature;
-                humidity == oldhumidity;
-            }
             sleep();; //wait a bit before next read attempt
         } //END for loop sanitychecks.
 
@@ -150,7 +147,11 @@ long readVcc() {
 
     long result = (high << 8) | low;
 
-    //result = 1125300L / result; // Calculate Vcc (in mV); 1125300 = 1.1*1023*1000
+    //scale_constant = internal1.1ref * 1024 * 1000 
+    //If large offset, recalculate internal1.1ref with: 1.1 * Vcc1 (per voltmeter) / Vcc2 (per readVcc() function)
+    //result = 1074966L / result; //offset sensor 20 (0.2v too high): 1.04977*1024*1000
+
+    //default reference, 1.1v:
     result = 1126400L / result; // Calculate Vcc (in mV); 1126400 = 1.1*1024*1000
     return result; // Vcc in millivolts
 }

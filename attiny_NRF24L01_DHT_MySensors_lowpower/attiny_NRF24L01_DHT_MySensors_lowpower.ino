@@ -12,19 +12,20 @@
     PB3   - CSN (active low)
     PB4  -   DHTxx, or AM2320 single wire mode, with sensor datapin. Must have a 4.7k pullup if using AM2320.
     PB5 (Reset, port is set as input pullup to avoid floating). Shoud have an external 4.7 pullup as well from datasheet but not critical.
-Description:
-Simple, small and low power (14.5uAh sleep)  temp and humidity sensor. Using mysensors 1.4.x stack, but works fine with mysensors 2.2 gateways. 
-Using wake up/transmit temp/humidity every 10 min, and reports voltage every 30. Battery voltage calculated using Attiny internal 1.1v reference.
+    Description:
+    Simple, small and low power (14.5uAh sleep)  temp and humidity sensor. Using mysensors 1.4.x stack, but works fine with mysensors 2.2 gateways.
+    Using wake up/transmit temp/humidity every 10 min, and reports voltage every 30. Battery voltage calculated using Attiny internal 1.1v reference.
+    Does some sanitychecks/rereads to avoid large spikes/jumps from dodgy (cheap) DHT sensors.
 */
 
 
-#define NODE_ID 24 //==========================CHANGE FOR EACH SENSOR=====================
+#define NODE_ID 31 //==========================CHANGE FOR EACH SENSOR=====================
 
 #include <avr/sleep.h>
 #include <avr/wdt.h>
 #include <avr/power.h>
 #define SLEEPLOOP 75 //75 //sleep loops before check/transmit. x*8s. Set to 75 in prod for ca 10 min
-#define VCCREPORT 3 //report interval for battery voltage. Counter goes up 1 every tempreport. 
+//#define VCCREPORT 3 //report interval for battery voltage. Counter goes up 1 every tempreport.
 #define CHECKLOOPMAX  7 //Recheck if it spikes more than +/-10. Using sleep(), 8s between each read, and when max reached giving up/accepting values.
 
 #include <MySensor.h>
@@ -49,16 +50,17 @@ float oldhumidity = 0; //Old value for sanitychecks
 float oldtemperature = 0; //Old values for sanitycheck
 float oldvoltage; //Old values for sanitycheck
 int tempcounter = SLEEPLOOP; //sleep loop counter, set high to force immediate read on boot.
-int vcccounter = VCCREPORT; //initially set high to trigger battery voltage report on boot.
+//int vcccounter = VCCREPORT; //initially set high to trigger battery voltage report on boot.
 
 void setup() {
     pinMode(PB5, INPUT_PULLUP); //PB5 (reset), enable internal pullup to avoid floating
     setup_watchdog(9); // enable watchdog service. (9) = 8s (max sleep interval)
-
+    delay(1000); //wait before radio present (avoid battery bounce/multiple send)
     //init NRF24 with MySensors protocol
     SPI.begin();
     gw.begin(NULL, NODE_ID);
-    gw.sendSketchInfo("ATTiny_NRF24_AM2320", "1.0");
+    //gw.setRetries(15, 15);  //test if avoids duplicates. Default is 5(delay in 250us increments)/15(retries). 
+    gw.sendSketchInfo("ATTiny_NRF24_AM2320", "1.3");
     gw.present(CHILD_ID_TEMP, S_TEMP);
     gw.present(CHILD_ID_HUM, S_HUM);
     gw.present(CHILD_ID_VOLTAGE, V_VOLTAGE);
@@ -98,29 +100,30 @@ void loop() {
             sleep();; //wait a bit before next read attempt
         } //END for loop sanitychecks.
 
-        SPI.begin();
-        gw.send(msgTemp.set(temperature, 2));
-        gw.send(msgHum.set(humidity, 2));
-        //report VCC voltage only once every VCCREPORT temp reports
-        if (vcccounter < VCCREPORT) {
-            vcccounter++;
-        } else {
-            float vccvoltage = readVcc(); //get VCC voltage, result is milivolt.
-            //check to avoid spikes - seems to be rare
-            if (vccvoltage - oldvoltage > 1000.0 && vccvoltage - oldvoltage < -1000.0) { //if spike +/-1V re-read
-                delay(1000);
-                vccvoltage = readVcc(); //get VCC voltage, result is milivolt.
-            }
-            oldvoltage = vccvoltage;
-            gw.send(msgVolt.set((vccvoltage / 1000), 2));
-            vcccounter = 1; //reset counter
+        float vccvoltage = readVcc(); //get VCC voltage, result is milivolt.
+        //check to avoid spikes - seems to be rare
+        if (vccvoltage - oldvoltage > 1000.0 && vccvoltage - oldvoltage < -1000.0) { //if spike +/-1V re-read
+            delay(1000);
+            vccvoltage = readVcc(); //get VCC voltage, result is milivolt.
         }
+        oldvoltage = vccvoltage;
+
+        SPI.begin();
+        gw.powerUp(); //radio on
+        gw.send(msgTemp.set(temperature, 2));
+        gw.powerDown(); //Workaround, Power down/delay after each to avoid duplicate transmits on cheap SMD/COB radio.
+        delay(2);
+        gw.powerUp(); //radio on
+        gw.send(msgHum.set(humidity, 2));
+        gw.powerDown(); //Hinders duplicates
+        delay(2);
+        gw.powerUp(); //radio on
+        gw.send(msgVolt.set((vccvoltage / 1000), 2));
         gw.powerDown(); //radio off
         SPI.end();
 
         //reset counter and go to sleep
-        tempcounter = 1; //reset counter
-        sleep();  //go to interrupt sleep
+        tempcounter = 0; //reset counter
     }
 } //END loop
 
@@ -147,7 +150,7 @@ long readVcc() {
 
     long result = (high << 8) | low;
 
-    //scale_constant = internal1.1ref * 1024 * 1000 
+    //scale_constant = internal1.1ref * 1024 * 1000
     //If large offset, recalculate internal1.1ref with: 1.1 * Vcc1 (per voltmeter) / Vcc2 (per readVcc() function)
     //result = 1074966L / result; //offset sensor 20 (0.2v too high): 1.04977*1024*1000
 

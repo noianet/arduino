@@ -19,7 +19,7 @@
 */
 
 
-#define NODE_ID 31 //==========================CHANGE FOR EACH SENSOR=====================
+#define NODE_ID 52 //==========================CHANGE FOR EACH SENSOR=====================
 
 #include <avr/sleep.h>
 #include <avr/wdt.h>
@@ -111,13 +111,13 @@ void loop() {
         SPI.begin();
         gw.powerUp(); //radio on
         gw.send(msgTemp.set(temperature, 2));
-        gw.powerDown(); //Workaround, Power down/delay after each to avoid duplicate transmits on cheap SMD/COB radio.
-        delay(2);
-        gw.powerUp(); //radio on
+       // gw.powerDown(); //Workaround, Power down/delay after each to avoid duplicate transmits on cheap SMD/COB radio.
+       // delay(2);
+       // gw.powerUp(); //radio on
         gw.send(msgHum.set(humidity, 2));
-        gw.powerDown(); //Hinders duplicates
-        delay(2);
-        gw.powerUp(); //radio on
+        //gw.powerDown(); //Workaround, Hinders duplicates
+        //delay(2);
+        //gw.powerUp(); //radio on
         gw.send(msgVolt.set((vccvoltage / 1000), 2));
         gw.powerDown(); //radio off
         SPI.end();

@@ -10,7 +10,7 @@
 #include <RCSwitch.h>
 
 RCSwitch radio = RCSwitch();
-dht DHT11;
+dht DHT;
 
 #define SLEEPLOOP 75 //sleep loops before check/transmit. x*8s. Set to 75 in prod
 #define VCCREPORT 3 //report interval for battery voltage. Counter goes up 1 every tempreport.
@@ -21,7 +21,6 @@ float humidity=10;  //Stores humidity value
 float temperature=10; //Stores temperature value
 float oldhumidity;  //Old value for sanitychecks
 float oldtemperature; //Old values for sanitycheck
-float oldvoltage; //Old values for sanitycheck
 int tempcounter = SLEEPLOOP; //sleep loop counter, set high to force immediate read on boot.
 int vcccounter = VCCREPORT; //initially set high to trigger battery voltage report on boot.
 
@@ -34,16 +33,14 @@ void setup() {
     //PB0 used, 433MHz transmitter
     pinMode(PB1, INPUT_PULLUP);
     pinMode(PB2, INPUT_PULLUP);
-    //PB3 used, DHT11
+    //PB3 used, DHT
     pinMode(PB4, INPUT_PULLUP);
     pinMode(PB5, INPUT_PULLUP); //PB5 (reset) with extra external pullup
 
 
-    int chk = DHT11.read11(DHTPIN); //Populate some data
-    oldtemperature = DHT11.temperature ;
-    oldhumidity = DHT11.humidity;
-
-     oldvoltage= readVcc(); //populate initial value
+    int chk = DHT.read(DHTPIN); //Populate some data
+    oldtemperature = DHT.temperature ;
+    oldhumidity = DHT.humidity;
        
     //indicate startup
     delay(1000);
@@ -58,9 +55,9 @@ void loop() {
     } else {
         //sanitychecks,
         for (int t=0; t < CHECKLOOPMAX; t ++)  {
-            int chk = DHT11.read11(DHTPIN);
-            temperature = DHT11.temperature ;
-            humidity = DHT11.humidity;
+            int chk = DHT.read(DHTPIN);
+            temperature = DHT.temperature ;
+            humidity = DHT.humidity;
             if ( (temperature - oldtemperature < 10.0 &&  temperature - oldtemperature > -10.0 ) || t == CHECKLOOPMAX ) { //if sane value or at max loops accept reading
                 oldtemperature = temperature;
             }
@@ -91,14 +88,6 @@ void loop() {
         } else {
             delay(1000); //allow the first transmission to complete before the next one.
             float vccvoltage = readVcc(); //get VCC voltage, result is milivolt.
-            //check to avoid spikes - seems to be rare
-            if (vccvoltage - oldvoltage > 1000.0 &&  vccvoltage - oldvoltage < -1000.0) { //if spike +1V re-read
-              delay(1000);
-              vccvoltage = readVcc(); //get VCC voltage, result is milivolt.
-              oldvoltage=vccvoltage;
-            } else {
-              oldvoltage=vccvoltage;
-            }
             radio.send(980000 + vccvoltage, 24); 
             vcccounter = 1; //reset counter
         }

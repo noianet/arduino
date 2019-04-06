@@ -3,10 +3,12 @@
     Hardware: Beetle (Leonardo), NRF24 radio, geared motor with hall sensor, limit switch, L293D H-bridge motor driver.
     With M5 rod current resolution is roughly 220 hall sensors pulses pr. mm.
 
+    Holds its odometer counter in eeprom(0) to survive loss of power. Holding switch down when powering on will initiate homing.
+
     Operation:
     Init, reverses untill motor stall detected, then forward until limit switch.  Then report (counter, voltage, statisonfo),
     Next sleep loops, retransmits every 10 min to match listener slot. After 1 hr. do new weight check. If switch still closed, reverse until free then forward again.
-    If motor stuck unexpectedly, hold/report until switch change (for manual exit from hold).
+    If motor stuck unexpectedly, hold/report until switch change (for manual exit from hold).    
 
     Status info, reported on Child_ID 3:
     0: Reset odometer (reverse)
@@ -28,6 +30,7 @@
 #define MY_PASSIVE_NODE // Enable passive mode
 #define MY_NODE_ID 200 //<============================= NodeID
 #include <MySensors.h>
+#include <EEPROM.h>
 
 // Initialize message
 MyMessage odometer(0, V_DISTANCE);
@@ -77,8 +80,18 @@ void setup() {
     digitalWrite(motorPinEnable, LOW); //safety, disable h-bridge, ensure led is off
     batteryvolt = readVcc();
     send(voltage.set(batteryvolt)); //Mysensors radio packet
-    send(statusInfo.set(0)); //Mysensors radio packet, indicate init/odo reset.
-}
+
+    //test if homing selected (switch down on powerup), else read odometer value from eeprom and do runmode 1
+    if (digitalRead(switchpin) == LOW) { 
+        send(statusInfo.set(0)); //Mysensors statuschange radio packet,
+        runMode = 0; //report
+    } else {
+      EEPROM.get(0,Odometer);
+      send(odometer.set(Odometer)); //Mysensors radio packet  - mostly for sanitycheck eeprom read..
+      send(statusInfo.set(1)); //Mysensors statuschange radio packet
+      runMode = 1;
+    }
+}  //END setup
 
 void presentation() {     // Mysensors, send the sketch version information to the gateway and Controller
     sendSketchInfo("Beehive Weight", "1.0");
@@ -186,6 +199,7 @@ void loop() {
                     send(odometer.set(Odometer)); //Mysensors radio packet
                     send(voltage.set(batteryvolt)); //Mysensors radio packet
                     send(statusInfo.set(4)); //Mysensors statuschange radio packet,
+                    EEPROM.put(0, Odometer); //Store to eeprom in case power loss.
                     runMode = 4;
                     sleepCounter = 0;
                     retransmitCounter = retransmitInterval;

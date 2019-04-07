@@ -10,6 +10,8 @@
     Next sleep loops, retransmits every 10 min to match listener slot. After 1 hr. do new weight check. If switch still closed, reverse until free then forward again.
     If motor stuck unexpectedly, hold/report until switch change (for manual exit from hold).    
 
+   Note: Only sending floats for compatibility with old version custom receiver relay
+
     Status info, reported on Child_ID 3:
     0: Reset odometer (reverse)
     1: Forward until switch on, then 3 report.
@@ -48,13 +50,13 @@ MyMessage statusInfo(2, V_VAR1);
 #define motorWait 300 //delay to wait for motor spinup
 #define sleepTimer 55 //56 //57=+1.2
 #define retransmitInterval 10 //retransmit every x min. Subtracting each 60sec loop. Used in sleep and stuck.
-long Odometer = 0;
-long previousOdometer = 0;
+float Odometer = 0; //float for compatibility Mysensor mymessage. Long would be OK othervise
+float previousOdometer = 0;
 byte runMode = 0; //0=init/reverse, 1: forward to switch, 2, reverse to switch off.
 unsigned long previousMillis = 0;
 int sleepCounter = 0;
 int retransmitCounter = retransmitInterval;
-int batteryvolt = 0;
+float batteryvolt = 0;
 
 
 //This will run only one time.
@@ -79,16 +81,16 @@ void setup() {
     digitalWrite(motorPin1, LOW);  digitalWrite(motorPin2, LOW); //safety, power off
     digitalWrite(motorPinEnable, LOW); //safety, disable h-bridge, ensure led is off
     batteryvolt = readVcc();
-    send(voltage.set(batteryvolt)); //Mysensors radio packet
+    send(voltage.set(batteryvolt,2)); //Mysensors radio packet
 
     //test if homing selected (switch down on powerup), else read odometer value from eeprom and do runmode 1
     if (digitalRead(switchpin) == LOW) { 
-        send(statusInfo.set(0)); //Mysensors statuschange radio packet,
+        send(statusInfo.set(0.0,1)); //Mysensors statuschange radio packet, Float format for compatibility
         runMode = 0; //report
     } else {
       EEPROM.get(0,Odometer);
-      send(odometer.set(Odometer)); //Mysensors radio packet  - mostly for sanitycheck eeprom read..
-      send(statusInfo.set(1)); //Mysensors statuschange radio packet
+      send(odometer.set(Odometer,1)); //Mysensors radio packet  - mostly for sanitycheck eeprom read..
+      send(statusInfo.set(1.0,1)); //Mysensors statuschange radio packet
       runMode = 1;
     }
 }  //END setup
@@ -111,9 +113,9 @@ void loop() {
             digitalWrite(LED_BUILTIN, LOW);
             //retransmit every 10 min to match listener slot if off.
             if (retransmitCounter <= 0) {
-                send(odometer.set(Odometer)); //Mysensors radio packet
-                send(voltage.set(batteryvolt)); //Mysensors radio packet
-                send(statusInfo.set(4)); //Mysensors statuschange radio packet,
+                send(odometer.set(Odometer,1)); //Mysensors radio packet
+                send(voltage.set(batteryvolt,2)); //Mysensors radio packet
+                send(statusInfo.set(4.0,1)); //Mysensors statuschange radio packet,
                 retransmitCounter = retransmitInterval;
             } else {
                 retransmitCounter--;
@@ -123,10 +125,10 @@ void loop() {
             //USBDevice.attach(); //DEBUG. For serial reattach after sleep disconnect, comment out.
             delay(1000); //might help radio wake.
             if (digitalRead(switchpin) == HIGH) {
-                send(statusInfo.set(1)); //Mysensors statuschange radio packet,
+                send(statusInfo.set(1.0,1)); //Mysensors statuschange radio packet,
                 runMode = 1;   //if switch not triggered, forward. If already, reverse.
             } else {
-                send(statusInfo.set(2)); //Mysensors statuschange radio packet,
+                send(statusInfo.set(2.0,1)); //Mysensors statuschange radio packet,
                 runMode = 2; //switch already on, reverse.
             }
             digitalWrite(motorPinEnable, HIGH); //enable h-bridge.
@@ -149,10 +151,10 @@ void loop() {
                 if (previousOdometer == Odometer) { //motor stalled
                     Odometer = 0;
                     if (digitalRead(switchpin) == HIGH) { //sanitycheck. Only continue if microswitch not triggered.
-                        send(statusInfo.set(1)); //Mysensors statuschange radio packet,
+                        send(statusInfo.set(1.0,1)); //Mysensors statuschange radio packet,
                         runMode = 1;
                     } else {
-                        send(statusInfo.set(9)); //Mysensors statuschange radio packet,
+                        send(statusInfo.set(9.0,1)); //Mysensors statuschange radio packet,
                         runMode = 9; //ERROR - something is stuck
                         retransmitCounter = retransmitInterval;
                     }
@@ -168,7 +170,7 @@ void loop() {
                 digitalWrite(motorPin1, LOW); digitalWrite(motorPin2, HIGH); //forward
                 delay(motorWait); ///give motor some time to spin up if just started.
                 if (previousOdometer == Odometer) { //motor stalled - might happen extending wagon too far/overweight.
-                    send(statusInfo.set(9)); //Mysensors statuschange radio packet,
+                    send(statusInfo.set(9.0,1)); //Mysensors statuschange radio packet,
                     runMode = 9; //STUCK
                     retransmitCounter = retransmitInterval;
                 } else {
@@ -182,7 +184,7 @@ void loop() {
                 digitalWrite(motorPin1, HIGH);  digitalWrite(motorPin2, LOW);  //reverse
                 delay(motorWait); ///give motor some time to spin up if just started.
                 if (previousOdometer == Odometer) { //motor stalled
-                    send(statusInfo.set(9)); //Mysensors statuschange radio packet,
+                    send(statusInfo.set(9.0,1)); //Mysensors statuschange radio packet,
                     runMode = 9; //STUCK
                     retransmitCounter = retransmitInterval;
                 } else {
@@ -196,9 +198,9 @@ void loop() {
                 //Serial.print ("Run3, Final odometer: "); Serial.println(Odometer);
                 if (previousOdometer == Odometer) { //motor have spun down completely.
                     batteryvolt = readVcc();
-                    send(odometer.set(Odometer)); //Mysensors radio packet
-                    send(voltage.set(batteryvolt)); //Mysensors radio packet
-                    send(statusInfo.set(4)); //Mysensors statuschange radio packet,
+                    send(odometer.set(Odometer,1)); //Mysensors radio packet
+                    send(voltage.set(batteryvolt,2)); //Mysensors radio packet
+                    send(statusInfo.set(4.0,1)); //Mysensors statuschange radio packet,
                     EEPROM.put(0, Odometer); //Store to eeprom in case power loss.
                     runMode = 4;
                     sleepCounter = 0;
@@ -216,7 +218,7 @@ void loop() {
                 delay(10);
                 digitalWrite(LED_BUILTIN, LOW);
                 if (retransmitCounter <= 0) {
-                    send(statusInfo.set(9)); //Mysensors statuschange radio packet,
+                    send(statusInfo.set(9.0,1)); //Mysensors statuschange radio packet,
                     retransmitCounter = retransmitInterval;
                 } else {
                     retransmitCounter--;
@@ -233,12 +235,12 @@ void loop() {
 void switchInterrupt() { //endstop triggered
     delay(100); // reduce bounce
     if (runMode == 1 and digitalRead(switchpin) == LOW) { //was running forward, switch runmode and reset previousMillis to force if sequence in loop,
-        send(statusInfo.set(3)); //Mysensors statuschange radio packet,
+        send(statusInfo.set(3.0,1)); //Mysensors statuschange radio packet,
         runMode = 3; //report
         previousMillis = 0;
         //Serial.println("DEBUG - Switchpin1");
     } else if (runMode == 2 and digitalRead(switchpin) == HIGH) { //was on reverse to lift switch, next forward to trip.
-        send(statusInfo.set(1)); //Mysensors statuschange radio packet,
+        send(statusInfo.set(1.0,1)); //Mysensors statuschange radio packet,
         runMode = 1; //Switch free, go forward
         previousMillis = 0;
         //Serial.println("DEBUG - Switchpin2");
@@ -247,15 +249,15 @@ void switchInterrupt() { //endstop triggered
         digitalWrite(motorPinEnable, HIGH); //enable h-bridge
         delay(1000);
         digitalWrite(LED_BUILTIN, LOW);
-        send(statusInfo.set(99)); //Mysensors statuschange radio packet,
+        send(statusInfo.set(9.9,1)); //Mysensors statuschange radio packet,
         if (digitalRead(switchpin) == HIGH) {
             runMode = 1; //forward, trigger open
             digitalWrite(motorPin1, LOW);  digitalWrite(motorPin2, HIGH);
-            send(statusInfo.set(91)); //Mysensors statuschange radio packet,
+            send(statusInfo.set(9.1,1)); //Mysensors statuschange radio packet,
         } else {
             runMode = 2;
             digitalWrite(motorPin1, HIGH);  digitalWrite(motorPin2, LOW);
-            send(statusInfo.set(92)); //Mysensors statuschange radio packet,
+            send(statusInfo.set(9.2,1)); //Mysensors statuschange radio packet,
         }
         delay(motorWait); ///give motor some time to spin up if just started.
         //Serial.println("DEBUG - Switchpin3");
@@ -270,7 +272,7 @@ void hallsensorInterrupt() { //if runmode motor direction forward (1), count up,
     }
 }
 
-long readVcc() {
+float readVcc() {
     // Read 1.1V reference against AVcc
     // set the reference to Vcc and the measurement to the internal 1.1V reference
 #if defined(__AVR_ATmega32U4__) || defined(__AVR_ATmega1280__) || defined(__AVR_ATmega2560__)
@@ -293,7 +295,8 @@ long readVcc() {
     long result = (high << 8) | low;
 
     result = 1125300L / result; // Calculate Vcc (in mV); 1125300 = 1.1*1023*1000
-    return result; // Vcc in millivolts
+    result = result/1000; //convert from millivolts
+    return result; // Vcc in volts
 }
 
 

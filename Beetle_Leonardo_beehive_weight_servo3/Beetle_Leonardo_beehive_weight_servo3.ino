@@ -48,7 +48,7 @@ MyMessage statusInfo(2, V_VAR1);
 #define motorPin2  11
 #define millisInterval  500 //ms, how often do checks when awake
 #define motorWait 300 //delay to wait for motor spinup
-#define sleepTimer 55 //56 //57=+1.2
+#define sleepTimer 60 //55 //56 //57=+1.2
 #define retransmitInterval 10 //retransmit every x min. Subtracting each 60sec loop. Used in sleep and stuck.
 float Odometer = 0; //float for compatibility Mysensor mymessage. Long would be OK othervise
 float previousOdometer = 0;
@@ -123,6 +123,7 @@ void loop() {
             sleep(60000);
         } else { //passed sleep limit, wake up and do stuff:
             //USBDevice.attach(); //DEBUG. For serial reattach after sleep disconnect, comment out.
+            digitalWrite(motorPinEnable, HIGH); //enable h-bridge.
             delay(1000); //might help radio wake.
             if (digitalRead(switchpin) == HIGH) {
                 send(statusInfo.set(1.0,1)); //Mysensors statuschange radio packet,
@@ -131,7 +132,6 @@ void loop() {
                 send(statusInfo.set(2.0,1)); //Mysensors statuschange radio packet,
                 runMode = 2; //switch already on, reverse.
             }
-            digitalWrite(motorPinEnable, HIGH); //enable h-bridge.
         }
 
     } else { //not in sleep mode, do millis
@@ -194,9 +194,9 @@ void loop() {
             //--------------Shutdown motor, report, sleep-----------------------------------
             else if (runMode == 3) { //report odometer value and go to sleep
                 digitalWrite(motorPin1, LOW);  digitalWrite(motorPin2, LOW); //power off directio outputs
-                digitalWrite(motorPinEnable, LOW); digitalWrite(LED_BUILTIN, LOW); //disable h-bridge, ensure led is off
                 //Serial.print ("Run3, Final odometer: "); Serial.println(Odometer);
                 if (previousOdometer == Odometer) { //motor have spun down completely.
+                    digitalWrite(motorPinEnable, LOW); digitalWrite(LED_BUILTIN, LOW); //disable h-bridge, ensure led is off
                     batteryvolt = readVcc();
                     send(odometer.set(Odometer,1)); //Mysensors radio packet
                     send(voltage.set(batteryvolt,2)); //Mysensors radio packet
@@ -243,7 +243,7 @@ void switchInterrupt() { //endstop triggered
         send(statusInfo.set(1.0,1)); //Mysensors statuschange radio packet,
         runMode = 1; //Switch free, go forward
         previousMillis = 0;
-        //Serial.println("DEBUG - Switchpin2");
+        //Serial.println("DEBUG - Switchpin2"); 
     } else if (runMode == 9) { //STUCK, but someone pressed the button.
         digitalWrite(LED_BUILTIN, HIGH); //indicate registered
         digitalWrite(motorPinEnable, HIGH); //enable h-bridge

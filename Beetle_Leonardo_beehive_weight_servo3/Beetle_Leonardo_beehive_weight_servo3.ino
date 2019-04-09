@@ -235,11 +235,15 @@ void loop() {
 void switchInterrupt() { //endstop triggered
     delay(100); // reduce bounce
     if (runMode == 1 and digitalRead(switchpin) == LOW) { //was running forward, switch runmode and reset previousMillis to force if sequence in loop,
+        digitalWrite(motorPin1, LOW);  digitalWrite(motorPin2, LOW); //shut down motor
+        delay(2000); //allow time to spin down to limit miscounting
         send(statusInfo.set(3.0,1)); //Mysensors statuschange radio packet,
         runMode = 3; //report
         previousMillis = 0;
         //Serial.println("DEBUG - Switchpin1");
     } else if (runMode == 2 and digitalRead(switchpin) == HIGH) { //was on reverse to lift switch, next forward to trip.
+        digitalWrite(motorPin1, LOW);  digitalWrite(motorPin2, LOW); //shut down motor
+        delay(2000); //allow time to spin down to limit miscounting
         send(statusInfo.set(1.0,1)); //Mysensors statuschange radio packet,
         runMode = 1; //Switch free, go forward
         previousMillis = 0;
@@ -267,8 +271,8 @@ void switchInterrupt() { //endstop triggered
 void hallsensorInterrupt() { //if runmode motor direction forward (1), count up, else subtract.
     if (runMode == 1) {
         Odometer++;
-    } else {
-        Odometer--;
+    } else if (runMode == 2) { //Loosing some counts. Might be due to noise sensor powerup, trying to mitigate - DEBUG TESTING.
+        Odometer--; 
     }
 }
 

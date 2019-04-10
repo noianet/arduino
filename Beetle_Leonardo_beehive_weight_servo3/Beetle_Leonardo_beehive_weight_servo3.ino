@@ -53,6 +53,7 @@ MyMessage statusInfo(2, V_VAR1);
 float Odometer = 0; //float for compatibility Mysensor mymessage. Long would be OK othervise
 float previousOdometer = 0;
 byte runMode = 0; //0=init/reverse, 1: forward to switch, 2, reverse to switch off.
+unsigned long currentMillis  = millis();
 unsigned long previousMillis = 0;
 int sleepCounter = 0;
 int retransmitCounter = retransmitInterval;
@@ -103,7 +104,7 @@ void presentation() {     // Mysensors, send the sketch version information to t
 }
 
 void loop() {
-    unsigned long currentMillis = millis();
+    currentMillis = millis();
     if (runMode == 4) { //if in in sleep mode.
         //Serial.print("Run4 sleep, loop: "); Serial.println(sleepCounter);
         if (sleepCounter < sleepTimer) {
@@ -235,18 +236,18 @@ void loop() {
 void switchInterrupt() { //endstop triggered
     delay(100); // reduce bounce
     if (runMode == 1 and digitalRead(switchpin) == LOW) { //was running forward, switch runmode and reset previousMillis to force if sequence in loop,
-        digitalWrite(motorPin1, LOW);  digitalWrite(motorPin2, LOW); //shut down motor
-        delay(2000); //allow time to spin down to limit miscounting
+        digitalWrite(motorPin1, LOW);  digitalWrite(motorPin2, LOW); //shut down motor2000
+        //delay(2000); //allow time to spin down to limit miscounting
         send(statusInfo.set(3.0,1)); //Mysensors statuschange radio packet,
         runMode = 3; //report
-        previousMillis = 0;
+        previousMillis = currentMillis; //reset millis to allow some spin down before entering do stuff
         //Serial.println("DEBUG - Switchpin1");
     } else if (runMode == 2 and digitalRead(switchpin) == HIGH) { //was on reverse to lift switch, next forward to trip.
         digitalWrite(motorPin1, LOW);  digitalWrite(motorPin2, LOW); //shut down motor
-        delay(2000); //allow time to spin down to limit miscounting
+        //delay(2000); //allow time to spin down to limit miscounting
         send(statusInfo.set(1.0,1)); //Mysensors statuschange radio packet,
         runMode = 1; //Switch free, go forward
-        previousMillis = 0;
+        previousMillis = currentMillis; //reset millis to allow some spin down before entering do stuff
         //Serial.println("DEBUG - Switchpin2"); 
     } else if (runMode == 9) { //STUCK, but someone pressed the button.
         digitalWrite(LED_BUILTIN, HIGH); //indicate registered

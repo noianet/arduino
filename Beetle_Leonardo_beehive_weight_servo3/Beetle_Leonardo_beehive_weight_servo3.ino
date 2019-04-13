@@ -272,7 +272,7 @@ void switchInterrupt() { //endstop triggered
 void hallsensorInterrupt() { //if runmode motor direction forward (1), count up, else subtract.
     if (runMode == 1) {
         Odometer++;
-    } else if (runMode == 2) { //Loosing some counts. Might be due to noise sensor powerup, trying to mitigate - DEBUG TESTING.
+    } else if (runMode == 0 or runMode == 2) { //Loosing some counts. Might be due to noise sensor powerup, trying to mitigate - DEBUG TESTING.
         Odometer--; 
     }
 }

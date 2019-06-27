@@ -18,8 +18,9 @@
     Test1 5.6mA mSsleep, 21.9mA active - spi poweroff, did not wake
     Test2 6.7mA mSsleep, 21.9mA active
     Test3: 0.6mA sleep, 21.9mA active. WDT, 8s loop..
-
-    edit: sleep, 4.30 min too long, voltage 0.05 high.
+    Test4 20.5mA active (smartsleep 10ms in else). Might have had packetloss,
+    Test5 17.3-17.8mA active (smartsleep 500ms in else w/interrupt pin 2). Reduced reception?
+    Test6 0.7mA sleep, 17.3mA active (smartsleep 500ms in else w/interrupt pin 2). Reduced reception? Lots of papcket loss..
 
 ***********************************************************************/
 #include <avr/sleep.h>
@@ -33,9 +34,9 @@
 #define MY_RF24_PA_LEVEL RF24_PA_LOW
 #define MY_RF24_CE_PIN 18 //A0 on board
 #define MY_RF24_CS_PIN 10 //CSN
-#define MY_RF24_IRQ_PIN 2
-#define MY_RX_MESSAGE_BUFFER_FEATURE //use IRQ
-#define MY_RX_MESSAGE_BUFFER_SIZE (3)
+//#define MY_RF24_IRQ_PIN 2
+//#define MY_RX_MESSAGE_BUFFER_FEATURE //use IRQ
+//#define MY_RX_MESSAGE_BUFFER_SIZE (3)
 
 #define MY_NODE_ID 252 //<============================= NodeID
 #define MY_GATEWAY_SERIAL //to set simple gateway mode. Modified for mobile forward
@@ -61,6 +62,7 @@ unsigned long previousMillis;
 unsigned int hourCounter = 0;
 unsigned int packetsCounter = 0;
 unsigned int packetsLastHourCounter = 0;
+unsigned int loopCounter = 0; //for reset trigging if all goes to hell..
 
 //messagestack
 String msgBuffer0 = "";
@@ -70,6 +72,7 @@ String msgBuffer3 = "";
 String msgBuffer4 = "";
 String msgBuffer5 = "";
 String msgBuffer6 = "";
+
 
 void setup() {
 
@@ -90,10 +93,9 @@ void setup() {
         //Serial.println(nbiot.imei());
     */
     // Try to create a socket until it succeeds
-    while (!nbiot.createSocket()) {
-        delay(100);
-    }
-
+     while (!nbiot.createSocket()) {
+         delay(100);
+     }
     nbiot.isConnected(); //just do check/read to force serial sync.
 
     //Power saving
@@ -128,6 +130,7 @@ void setup() {
 void loop() {
     //Send from buffer handler
     if (nbiot.isConnected()) {
+        loopCounter=0; 
         if (msgBuffer0 != "") {
             //Serial.println("s0");
             nbiot.sendString(remoteIP, REMOTE_PORT, msgBuffer0);
@@ -156,11 +159,16 @@ void loop() {
             //Serial.println("s6");
             nbiot.sendString(remoteIP, REMOTE_PORT, msgBuffer6);
             msgBuffer6 = ""; //clear
+        } else {
+            smartSleep(2, CHANGE, 1000); //interrupt pin, interrupt type, delay in ms. In practice heartbeat towards NBIOT. Wake if nrf get packet
         }
     }
-    else {
+    else { //fallback, check stuff, worst case reboot and hope for the best...
         //Serial.println("NC");
-        delay(5000);
+        //delay(5000);
+        loopCounter++;
+        if (loopCounter > 200) reboot(); //watchdog, reboot if never connects. DEBUG - THIS WORKS?
+        smartSleep(2, CHANGE, 5000); //interrupt pin, interrupt type, delay in ms
     }
 
     //Sleep section
@@ -168,19 +176,13 @@ void loop() {
         digitalWrite(MY_RF24_CE_PIN, LOW);  //set NRF to output/low power mode
         //power_spi_disable();
         //Serial.println("DEBUG: Entering millis" );
-        /*  sendMessage(String(MY_NODE_ID) + "/255/1/0/24_" + String(hourCounter)); //Notify uptime
-            sendMessage(String(MY_NODE_ID) + "/255/1/0/25_" + String(packetsCounter)); //Notify uptime
-            sendMessage(String(MY_NODE_ID) + "/255/1/0/26_" + String(packetsLastHourCounter)); //Notify uptime
-            sendMessage(String(MY_NODE_ID) + "/255/1/0/38_" + readVoltage());
-            sendMessage(String(MY_NODE_ID) + "/255/3/0/14_0"); //Indicate gateway sleeping*/
+        //Send bye messages directly/out of buffer.
         nbiot.sendString(remoteIP, REMOTE_PORT, String(MY_NODE_ID) + "/255/1/0/24_" + String(hourCounter));
         nbiot.sendString(remoteIP, REMOTE_PORT, String(MY_NODE_ID) + "/255/1/0/25_" + String(packetsCounter));
         nbiot.sendString(remoteIP, REMOTE_PORT, String(MY_NODE_ID) + "/255/1/0/26_" + String(packetsLastHourCounter));
         nbiot.sendString(remoteIP, REMOTE_PORT, String(MY_NODE_ID) + "/255/1/0/38_" + readVoltage());
         nbiot.sendString(remoteIP, REMOTE_PORT, String(MY_NODE_ID) + "/255/3/0/14_0"); //Indicate gateway sleeping
 
-        hourCounter++;
-        packetsLastHourCounter = 0;
         //sleep section from here.
         for (int i = 0; i < 337; i++) {  //336, Sleep Loop, 8s ca each. ,-33=334 22 sec fast , 367 roughly 49min
             digitalWrite(MY_RF24_CE_PIN, LOW);  //DEBUG: force NRF to output/low power mode. Fighting MySensors blobs.
@@ -189,10 +191,11 @@ void loop() {
             sleep_mode();  /* Now enter sleep mode. */
             //sleep_disable();   //not needed?
         }
-        digitalWrite(MY_RF24_CE_PIN, HIGH);
-        //nbiot.isConnected(); //just do check to sync after wakeup
 
+        digitalWrite(MY_RF24_CE_PIN, HIGH);
         sendMessage(String(MY_NODE_ID) + "/255/3/0/14_1"); //Indicate gateway ready
+        hourCounter++;
+        packetsLastHourCounter = 0;
         previousMillis = millis();
     }
 } //END loop
@@ -200,8 +203,13 @@ void loop() {
 //------------------------------UTILS BELOW-------------------------------
 //ISR(WDT_vect) <- in mysensors blobs
 //{
-    //do nothing, handler for sleep
+//do nothing, handler for sleep
 //}
+void reboot() { //reboot, used in end in loop if connect fails constantly...
+  wdt_disable();
+  wdt_enable(WDTO_15MS);
+  while (1) {}
+}
 
 void receive(const MyMessage &message)  {//Kicked off by mysensors lib by interrupt apparently. Unpacks to packet array and forwards to sendMessage() function
     String msgValue = String(message.getFloat());

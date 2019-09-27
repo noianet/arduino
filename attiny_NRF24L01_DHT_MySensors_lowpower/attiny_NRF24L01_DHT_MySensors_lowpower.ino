@@ -16,10 +16,14 @@
     Simple, small and low power (14.5uAh sleep)  temp and humidity sensor. Using mysensors 1.4.x stack, but works fine with mysensors 2.2 gateways.
     Using wake up/transmit temp/humidity every 10 min, and reports voltage every 30. Battery voltage calculated using Attiny internal 1.1v reference.
     Does some sanitychecks/rereads to avoid large spikes/jumps from dodgy (cheap) DHT sensors.
+
+    Reminder: Set at 8Mhz to be fast enough for radio.
+
+    Reminder: Switch from highlowtech to Attiny-core 1.1.5 for sensor 53/54, attiny-core 1.2.5 from there.
 */
 
 
-#define NODE_ID 52 //==========================CHANGE FOR EACH SENSOR=====================
+#define NODE_ID 58 //==========================CHANGE FOR EACH SENSOR=====================
 
 #include <avr/sleep.h>
 #include <avr/wdt.h>

@@ -1,10 +1,10 @@
 /*
- * 
- * REMEMBER: Set nano atmega328 old bootloader before flash <--------------
- * 
- * 
+    REMEMBER: Set nano atmega328 old bootloader before flash <--------------
+ 
     Temperature driven fan controller, 3 wire. 
     Using unknown thermistors from tower (10k), Vdivider with 10K resistor. Air only reporting, water for fan control.
+    Fans run by PWM feeding a basic NPN transistor. MCU PWM frequency increased to avoid audible noise.
+    Fan tacho read via interrupt, used for logging and stall detection. Since fans are in parallell and fead via PWM output are a bit rough but good enough.
     
     Serial output example:
     Ta: 20.08 Tw: 21.64 PWMc: 120 PWMa: 150 Fs: 1 RPM: 198
@@ -20,10 +20,6 @@
     Millis logicsteps autodriver runs every 2 sec. Millis Serial reports stats via serial every 10 sec, 
 
     TODO: Consider only RPM check not zero since seems consistent for extra kick. Remove out fanRunningState completely?
-    24.0 * x = 120
-    29.0 * x = 255
-
-    
 */
 #include <math.h>
 
@@ -90,12 +86,12 @@ void loop() {
         logicMillis = millis();
         airTemp = calculateTemp(analogRead(TEMPPINAIR));
         waterTemp = calculateTemp(analogRead(TEMPPINWATER));
-
         waterTemp = (oldWaterTemp*1 + waterTemp) / 2; //simple smoothing
-        oldWaterTemp = waterTemp; //store for next averaging
+        oldWaterTemp = waterTemp; //save for next smoothing
         
         if (waterTemp < 0) waterTemp=0; //HACK! if negative values highly likely termistor broken. Set to 0 to avoid bad graphs at receiver.
-        
+
+        //---------calculate PWM want section-------------
         if (waterTemp >= MAXTEMP or waterTemp <= 0) { //full blast if over temp or termistor is bad (0 or lower)
             pwmstate = 255;    //past max temp, full power
             pwmstateavg = 255;
@@ -108,17 +104,16 @@ void loop() {
                 fanRunningState = 1;
                 digitalWrite(LED_BUILTIN, HIGH);
                 pwmstateavg = KICKSPEED;
-                analogWrite(PWMPIN, KICKSPEED);
-                delay(1000);
-            }
-
-            //pwmstate = mapf(waterTemp, MINTEMP, MAXTEMP, MINSPEED, 255); //dynamically adjust PWM based on temp range. mapf() function below
-
-            //using temp*100 to handle decimals since map function below does integer math
-            pwmstate = map(waterTemp*100, MINTEMP*100, MAXTEMP*100, MINSPEED, 255); //dynamically adjust PWM based on temp range. 
-        } else if (waterTemp < MINTEMP) pwmstate = 0; //fan off. -2 to have some more hysterisis around off point
-
+                pwmstate = KICKSPEED;
+                analogWrite(PWMPIN, KICKSPEED); //probably pointless since set again below.
+            } else {
+              //map temp to PWM, using temp*100 to handle decimals since map function below does integer math
+              pwmstate = map(waterTemp*100, MINTEMP*100, MAXTEMP*100, MINSPEED, 255); //dynamically adjust PWM based on temp range. 
+            }  
+        } else if (waterTemp < MINTEMP) pwmstate = 0; //fast drop to fan off (still averaged below). 
         pwmstateavg = (pwmstateavg*3 + pwmstate) / 4; //averaging. var 3/4
+
+        //---------set PWM want section, pwmstateavg is want-------------
         if (pwmstateavg > MINSPEED or (pwmstate > MINSPEED and pwmstateavg > MINSPEED)) {
             analogWrite(PWMPIN, pwmstateavg);
         } else {
@@ -130,7 +125,7 @@ void loop() {
         
     if (currentMillis - reportMillis > 30000 and manualSpeed == 0) { //only do if not received manual speed
         reportMillis = millis();        
-        /*Serial.print("Ta: ");
+        Serial.print("Ta: ");
         Serial.print(airTemp);
         Serial.print(" Tw: ");
         Serial.print(waterTemp);
@@ -141,9 +136,8 @@ void loop() {
         Serial.print(" Fr: ");
         Serial.print(fanRunningState);
         Serial.print(" RPM: ");
-        Serial.println(rpm);     */
+        Serial.println(rpm);     
 
-        Serial.println("Ta: " + String(airTemp) + " Tw: " +  String(waterTemp) + " Pc: " + pwmstate + " Pa: " + String(pwmstateavg) + " Fr: " + fanRunningState + " RPM: " + rpm); 
         rpm = 0; //reset rpm counter
     } //END reportMillis
 } //end loop()

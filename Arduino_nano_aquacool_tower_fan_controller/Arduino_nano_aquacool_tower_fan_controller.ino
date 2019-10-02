@@ -55,19 +55,18 @@ void setup() {
     pinMode(TEMPPINAIR, INPUT); 
     pinMode(TEMPPINWATER, INPUT); 
 
-    //TCCR0B = TCCR0B & 0b11111101 | 0x01; //increases PWM frequency
     Serial.begin(115200); 
     delay(500); 
     Serial.println("Fancontroller boot");
 
-    //run fan on max to indicate not braindead
+    //run fan on max to indicate not braindead on boot
     analogWrite(PWMPIN, 255);
     digitalWrite(LED_BUILTIN, HIGH);
     delay(4000);
 
     inputString.reserve(3); //reserve for 3 character serial input (number=fan speed, 0-255)
     //Serial.println("Entering loop");
-} //end setup()
+} //END setup()
 
 void loop() {
     //serial input handler, If run overrides millis autimatics below
@@ -97,10 +96,10 @@ void loop() {
             pwmstateavg = 255;
         } else if (waterTemp > MINTEMP) {
             if (fanRunningState == 0 or rpm < MINRPM) { //kick pwmstateavg high to get fan running. TODO: Consider phasing out runningstate since rpm consistent
-                Serial.print("DBG: Kick, fr: ");
+                /*Serial.print("DBG: Kick, fr: ");
                 Serial.print(fanRunningState);
                 Serial.print(", rpm: ");
-                Serial.println(rpm);
+                Serial.println(rpm);*/
                 fanRunningState = 1;
                 digitalWrite(LED_BUILTIN, HIGH);
                 pwmstateavg = KICKSPEED;
@@ -110,11 +109,18 @@ void loop() {
               //map temp to PWM, using temp*100 to handle decimals since map function below does integer math
               pwmstate = map(waterTemp*100, MINTEMP*100, MAXTEMP*100, MINSPEED, 255); //dynamically adjust PWM based on temp range. 
             }  
-        } else if (waterTemp < MINTEMP) pwmstate = 0; //fast drop to fan off (still averaged below). 
-        pwmstateavg = (pwmstateavg*3 + pwmstate) / 4; //averaging. var 3/4
+            pwmstateavg = (pwmstateavg*3 + pwmstate) / 4; //averaging. var 3/4
+        } else if (waterTemp < MINTEMP) {//fan off
+          pwmstate = 0;
+          pwmstateavg = 0;
+          /*Serial.print("DBG: Fan Off, Fr: ");
+          Serial.print(fanRunningState);
+          Serial.print(", rpm: ");
+          Serial.println(rpm);*/
+        }
 
         //---------set PWM want section, pwmstateavg is want-------------
-        if (pwmstateavg > MINSPEED or (pwmstate > MINSPEED and pwmstateavg > MINSPEED)) {
+        if (pwmstateavg > MINSPEED) {
             analogWrite(PWMPIN, pwmstateavg);
         } else {
             analogWrite(PWMPIN, 0);
@@ -137,10 +143,9 @@ void loop() {
         Serial.print(fanRunningState);
         Serial.print(" RPM: ");
         Serial.println(rpm);     
-
         rpm = 0; //reset rpm counter
     } //END reportMillis
-} //end loop()
+} //END loop()
 
 void fanInterrupt() { //pin2 interrupt handler
     rpm++;

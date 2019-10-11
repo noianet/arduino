@@ -26,7 +26,7 @@
 #define MAXTEMP 29.0 //Fan on full speed. 
 #define MINTEMP  24.0 //FAN off. 
 #define MINSPEED 120 //Minimum fan speed, Referenced PWM range 0-255. Needs kick...
-#define MINRPM 60 //Minimum fan speed RPM read before doing a kick. 
+#define MINRPM 120 //Minimum fan speed RPM read before doing a kick. 
 #define KICKSPEED 255 //Minimum fan startup value. 220 too low/failed once, just start at full blast to be sure...
 #define TEMPPINAIR A1
 #define TEMPPINWATER A2
@@ -35,7 +35,6 @@
 
 double airTemp = 22; //sensible start value
 double waterTemp = 25;
-double oldWaterTemp = 25; //for simple smoothing
 unsigned long rpm = 0;
 boolean fanRunningState = 1; //TODO: consider removing
 int pwmstate = 255;
@@ -85,9 +84,7 @@ void loop() {
         logicMillis = millis();
         airTemp = calculateTemp(analogRead(TEMPPINAIR));
         waterTemp = calculateTemp(analogRead(TEMPPINWATER));
-        waterTemp = (oldWaterTemp*1 + waterTemp) / 2; //simple smoothing
-        oldWaterTemp = waterTemp; //save for next smoothing
-        
+
         if (waterTemp < 0) waterTemp=0; //HACK! if negative values highly likely termistor broken. Set to 0 to avoid bad graphs at receiver.
 
         //---------calculate PWM want section-------------

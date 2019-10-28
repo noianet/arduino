@@ -14,13 +14,8 @@
 
     Voltage divider lipo-R1 47k --- R2 22k --gnd. 0.1uF cap on analog in to gnd.
 
-    Note: Only reads mysensors float values.
-    Test1 5.6mA mSsleep, 21.9mA active - spi poweroff, did not wake
-    Test2 6.7mA mSsleep, 21.9mA active
-    Test3: 0.6mA sleep, 21.9mA active. WDT, 8s loop..
-    Test4 20.5mA active (smartsleep 10ms in else). Might have had packetloss,
-    Test5 17.3-17.8mA active (smartsleep 500ms in else w/interrupt pin 2). Reduced reception?
-    Test6 0.7mA sleep, 17.3mA active (smartsleep 500ms in else w/interrupt pin 2). Reduced reception? Lots of papcket loss..
+    Note: Only reads mysensors float values. Incoming NRF packets are stored via interrupt in a message stack awaiting transmit loop pickup.
+    Listens for 11 minutes, then sleeps 49 (sensor nodes runs at a 10min transmit interval)
 
 ***********************************************************************/
 #include <avr/sleep.h>
@@ -38,7 +33,8 @@
 //#define MY_RX_MESSAGE_BUFFER_FEATURE //use IRQ
 //#define MY_RX_MESSAGE_BUFFER_SIZE (3)
 
-#define MY_NODE_ID 252 //<============================= NodeID
+#define SLEEPLOOPS 326 //*8s pr to get roughly 49min sleep. Adjusted clockdrift NodeID 251: 326, Nodeid 252: 337
+#define MY_NODE_ID 251 //<============================= NodeID
 #define MY_GATEWAY_SERIAL //to set simple gateway mode. Modified for mobile forward
 #define MY_DISABLED_SERIAL  //to skip serial wait. 
 //#define MY_DISABLE_RAM_ROUTING_TABLE_FEATURE
@@ -184,7 +180,7 @@ void loop() {
         nbiot.sendString(remoteIP, REMOTE_PORT, String(MY_NODE_ID) + "/255/3/0/14_0"); //Indicate gateway sleeping
 
         //sleep section from here.
-        for (int i = 0; i < 337; i++) {  //336, Sleep Loop, 8s ca each. ,-33=334 22 sec fast , 367 roughly 49min
+        for (int i = 0; i < SLEEPLOOPS; i++) {  //Sleep Loop, 8s ca each. 
             digitalWrite(MY_RF24_CE_PIN, LOW);  //DEBUG: force NRF to output/low power mode. Fighting MySensors blobs.
             set_sleep_mode(SLEEP_MODE_PWR_SAVE);   /* EDIT: could also use SLEEP_MODE_PWR_DOWN for lowest power consumption. */
             sleep_enable();

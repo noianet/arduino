@@ -24,7 +24,7 @@
 #include <avr/power.h>
 #include <avr/wdt.h>
 
-#define SLEEPLOOPS 341 //*8s pr to get roughly 49min sleep. Adjusted clockdrift NodeID 251: 326, Nodeid 252: 337, NodeID 253: 341
+#define SLEEPLOOPS 339 //*8s pr to get roughly 49min sleep. Adjusted clockdrift NodeID 251: 326, Nodeid 252: 337, NodeID 253: 339
 #define MY_NODE_ID 253 //<============================= Unique NodeID
 
 #define POWERPIN A3 //to read battery voltage 

@@ -50,7 +50,7 @@ TelenorNBIoT nbiot("telenor.iot", 242, 01);
 
 // The remote IP address to send data packets to
 // u-blox SARA N2 does not support DNS
-IPAddress remoteIP(173, 249, 2, 55);
+IPAddress remoteIP(xxx, xxx, xxx, xxx); //UDP server IP
 #define REMOTE_PORT 1234
 
 //Millis used for hourly "cron" job

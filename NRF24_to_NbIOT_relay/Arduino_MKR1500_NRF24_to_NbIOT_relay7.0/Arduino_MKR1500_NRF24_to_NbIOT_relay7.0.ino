@@ -31,7 +31,7 @@
 #define SLEEPLOOPS 351 // ca *8s pr to get roughly 49min sleep, adjusted for clockdrift. Relay_254: 358
 #define MY_NODE_ID 254 //<============================= Unique NodeID
 
-IPAddress serverIP(173, 249, 2, 55); //udp server address
+IPAddress serverIP(xxx, xxx, xxx, xxx); //udp server address
 #define REMOTE_PORT 1234   //udp server port
 
 //#define MY_DEBUG // Enable debug prints to serial monitor

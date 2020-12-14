@@ -18,18 +18,21 @@
     Power usage: approx 33mA when awake/listening, peaks to 115mA on transmit, and ca 1mA sleeping.
 
     Note, workaround if long term lockups..  https://github.com/arduino-libraries/MKRGSM/issues/66
+
+    Only NBUDP (and therfore MODEM class) used from MKRNB since rest is utter garbage and crashes/locks up  the modem.
+    Using modem powersave instead of switching PWR pin etc. from MKRNB sketches (which crashes the modem often).
+
 ***********************************************************************/
 #include <MKRNB.h>
 #include <ArduinoLowPower.h>
 #include <WDTZero.h> //watchdog frozen (modem hangs) and deepsleep 8s wakeup.
+//#define DEBUG  //enable debug display AT commands.
 
-#define SLEEPLOOPS 358 // ca *8s pr to get roughly 49min sleep. Relay_254: 358
+#define SLEEPLOOPS 351 // ca *8s pr to get roughly 49min sleep, adjusted for clockdrift. Relay_254: 358
 #define MY_NODE_ID 254 //<============================= Unique NodeID
 
-IPAddress serverIP(xxx, xxx, xxx, xxx); //udp server address
+IPAddress serverIP(173, 249, 2, 55); //udp server address
 #define REMOTE_PORT 1234   //udp server port
-const char PINNUMBER[]     = ""; //The MKRNB lib needs this even if its blank
-bool     debugNB           = false;  //show AT commands
 
 //#define MY_DEBUG // Enable debug prints to serial monitor
 #define MY_BAUD_RATE 115200
@@ -42,20 +45,16 @@ bool     debugNB           = false;  //show AT commands
 #define MY_DISABLED_SERIAL  //to skip serial wait. 
 #include <MySensors.h>
 
-// initialize the library instance
-NBClient client;
-GPRS gprs;
-NB nbAccess(debugNB);
 NBUDP udp;
+
+byte wdtCounter, wdtCounterReset;
+WDTZero MyWatchDoggy; //generates a reset if software loop does not clear WDT on time (generally modem issues).
 
 unsigned long previousMillis; //used for sleep trigger
 unsigned int hourCounter = 0;  //total hours since boot
 unsigned long packetsCounter = 0; //total packets sent since boot
 unsigned long bytesCounter = 0; //total bytes sent since boot
 unsigned int packetsLastHourCounter = 0;
-
-byte wdtCounter, wdtCounterReset;
-WDTZero MyWatchDoggy; //generates a reset if software loop does not clear WDT on time (generally modem issues).
 
 //simple messagestack
 String msgBuffer0 = "";
@@ -71,25 +70,31 @@ String msgBuffer9 = "";
 
 
 void setup() {
+    digitalWrite(LED_BUILTIN, HIGH); //blink to tell alive
+    wait(100);
+    digitalWrite(LED_BUILTIN, LOW);
+
     pinMode(SARA_PWR_ON, OUTPUT);
+    digitalWrite(SARA_PWR_ON, HIGH);
+    // reset the SerialSARA module <- THIS IS NOT IDEAL.. But sometimes only option to get an unresponsive modem back (watchdog should reset).
+    pinMode(SARA_RESETN, OUTPUT);
+    digitalWrite(SARA_RESETN, HIGH);
+    delay(100);
+    digitalWrite(SARA_RESETN, LOW);
+
     // initialize serial communications and wait for port to open:
     //Serial.begin(115200); <started by mysensors
     //while (!Serial);
-    delay(500);
+
     Serial.println("Initial wait 10s to defend against zombies");
     delay(10000); //Blocking delay for zombie protection
 
     MyWatchDoggy.setup(WDT_SOFTCYCLE2M); //watchdog generates a reset if software loop does not clear WDT within every 2 min
 
-    //power on and reset modem
-    digitalWrite(SARA_PWR_ON, HIGH);
-    wait(100);
-    pinMode(SARA_RESETN, OUTPUT);
-    digitalWrite(SARA_RESETN, HIGH);
-    wait(100);
-    digitalWrite(SARA_RESETN, LOW);
+    MODEM.begin(115200);  //modem class from MKRNB, there for NBUDP.
+    while (!SerialSARA);
 
-    connectModem();  //init the modem
+    connectModem();  //init the modem. DO NOT USE POWER/RESET PIN FROM ARDUINO EXAMPLES.
 
     //Add some boot messages to buffer, will be picked up and sent from loop
     readVoltage(); //Force 1 read since first on boot seems to fail/show max. Fix OK.
@@ -162,28 +167,34 @@ void loop() {
         wait(50); //to not overload modem
         udpSendString(serverIP, REMOTE_PORT, String(MY_NODE_ID)  + "@" + String(MY_NODE_ID) + "/255/1/0/27_" + String(bytesCounter));
         wait(50); //to not overload modem
-        udpSendString(serverIP, REMOTE_PORT, String(MY_NODE_ID)  + "@" + String(MY_NODE_ID) + "/255/1/0/38_" + readVoltage());
+        String currVoltage = readVoltage();
+        udpSendString(serverIP, REMOTE_PORT, String(MY_NODE_ID)  + "@" + String(MY_NODE_ID) + "/255/1/0/38_" + currVoltage);
         wait(50); //to not overload modem
         udpSendString(serverIP, REMOTE_PORT, String(MY_NODE_ID)  + "@" + String(MY_NODE_ID) + "/255/3/0/14_0"); //Indicate gateway sleeping
 
-        //Serial.println("DEBUG entering sleep section, shutting down modem etc");
-        wait(500); //delay to allow mobile modem to finish sending before turning off.
+        Serial.println("DEBUG entering sleep section");
+        //COMMENT: No command for modem sleep needed since In connectModem() set auto-sleeps if no UART TX.
 
-        nbAccess.secureShutdown(); //Send modem to sleep
-        client.flush(); //Cleanup, just in case
-        client.stop();  //Cleanup, just in case
+        MyWatchDoggy.clear(); //Clear watchdog timer, if not done within max 2min or it will reset the cpu.
         for (int i = 0; i < SLEEPLOOPS; i++) {  //Sleep Loop, 8s ca each.
             digitalWrite(MY_RF24_CE_PIN, LOW);  //DEBUG: force NRF to output/low power mode. Fighting MySensors blobs.
             LowPower.deepSleep();  //wake every 8s by watchdog timer
+            //delay(8000);
             MyWatchDoggy.clear(); //Clear watchdog timer, if not done within max 2min or it will reset the cpu.
             digitalWrite(LED_BUILTIN, HIGH); //flash to tell still alive
             wait(50);
+            //Serial.print("z");
             digitalWrite(LED_BUILTIN, LOW);
         }
-        //Serial.println("DEBUG end sleep section,");
-        //wake up radios
-        connectModem();  //wakes up and inits modem
-        digitalWrite(MY_RF24_CE_PIN, HIGH); //after modem to avoid potential NRF interrupt mishaps
+        Serial.println();
+        Serial.println("End sleep section,");
+        //_________wake up radios_________
+        //wake modem by pestering it with some UART TX activity
+        sendATcommand("AT" , 1000);
+        sendATcommand("AT" , 1000);
+        sendATcommand("AT" , 1000);
+
+        digitalWrite(MY_RF24_CE_PIN, HIGH); //enable NRF radio
 
         sendMessage(String(MY_NODE_ID)  + "@" + String(MY_NODE_ID) + "/255/3/0/14_1"); //Indicate gateway ready
         hourCounter++;
@@ -194,35 +205,101 @@ void loop() {
 
 //===============functions below=========================
 void connectModem() {
-    digitalWrite(SARA_PWR_ON, HIGH); //just in case, ensure the thing has power
-    digitalWrite(LED_BUILTIN, HIGH); //turn on led to indicate connecting
-    Serial.println("Booting modem");
-    boolean connected = false;
-    while (!connected) {
-        if ((nbAccess.begin(PINNUMBER) == NB_READY) && (gprs.attachGPRS() == GPRS_READY)) {
-            connected = true;
+    //reset all deadman switches
+    MyWatchDoggy.clear();
+    digitalWrite(LED_BUILTIN, HIGH); //turn on to indicate modem connecting
+
+    sendATcommand("AT" , 1000); //wake modem
+    //Serial.println("Ensure radio disabled");
+    sendATcommand("AT+COPS=2" , 500);  //ensure deregistered from network
+    sendATcommand("AT+IPR=115200", 500); //lock UART to 115200 baud
+    sendATcommand("AT+UPSV=4" , 500);  //autosleep power saving based on UART TX line activity
+    //sendATcommand("AT+CPSMS=1,,,\"11111111\",\"00000000\"" , 500);  //"Never" wake to check for downstream data.
+    //sendATcommand("AT+CPSMS=1,,,\"01100000\",\"00000000\"" , 500);  //Slow down wake to check for downstream data.
+    sendATcommand("AT+CPSMS=0,,,\"00000000\",\"00000000\"" , 500);  //Seems like disabled is only way to avoid crashes.
+    sendATcommand("AT+CFUN=15" , 500); //silent reset  (with detach from network and saving of NVM parameters),
+    Serial.println("Enable radio and check signal, CSQ must be below 99.99");
+    sendATcommand("AT+CFUN=1" , 500); // sets the MT to full functionality
+    sendATcommand("AT+CSQ" , 2000);  //check signal strength a few times to nag modem/ensure radio is awake.
+    sendATcommand("AT+CSQ" , 2000);
+    sendATcommand("AT+CSQ" , 2000);
+    sendATcommand("AT+CSQ" , 2000);
+    sendATcommand("AT+CMGF=1" , 500); //message format to text mode
+    sendATcommand("AT+UDCONF=1,1" , 500); // HEX mode enabled
+    /*    Serial.println("Set operator/apn");
+        sendATcommand("AT+COPS=1,2,\"24201\"" , 500);
+        sendATcommand("AT+CGDCONT=1,\"IP\",\"mdatks\"" , 500);  //set APN
+        sendATcommand("AT+UAUTHREQ=1,0" , 500); //Configures the authentication parameters of a defined PDP/EPS bearer
+        sendATcommand("AT+CGDCONT?" , 500); //redudnant but just extra check.*/
+    Serial.println("Testing connected to mobile network");
+    while (true) {
+        String ATresult = String(sendATcommand("AT+CEREG?" , 500).substring(20, 23));
+        //Serial.println("DEBUG substring:" + ATresult);
+        if (ATresult == "0,1") { // or ATresult == "0,2")
+            Serial.println("Success, status:" + ATresult);
+            break;
         } else {
-            Serial.println("Connecting...");
-            wait(1000);
+            Serial.println("Still connecting, status:" + ATresult);
+            delay(2000);
         }
-        udp.begin(5000);
     }
+    Serial.print("Connected, assigned PSM values:");
+    Serial.println(sendATcommand("AT+UCPSMS?" , 500));  //prints assigned PSM valuwes from netwiork
+
+    MyWatchDoggy.clear();
+    Serial.println("Activate and test GPRS ");
+    sendATcommand("AT+CGATT=1" , 500);
+    while (true) {
+        String ATresult = String(sendATcommand("AT+CGACT?" , 500).substring(12, 21)); //CGATT
+        if (ATresult == "+CGACT: 1") {
+            Serial.println("Success, status:" + ATresult);
+            break;
+        } else {
+            Serial.println("GPRS error, status:" + ATresult);
+            delay(2000);
+        }
+    }
+    MyWatchDoggy.clear();
+    Serial.println("Open UDP socket");  
+    udp.begin(5000); //this part uses sandard MKNRB lib since has some convenient string conversion stuff.
     digitalWrite(LED_BUILTIN, LOW); //turn off to indicate modem OK
     Serial.println("Modem connected");
 } //END connectModem
 
+String sendATcommand(String command, unsigned long timeout) {
+    String ATresponse = "";
+    SerialSARA.println(command);
+    unsigned long lastRead = millis();   // last time a char was available
+    while (millis() - lastRead < timeout) {
+        while (SerialSARA.available()) {
+            char c = SerialSARA.read();
+            ATresponse += c;  // append to the result string
+            lastRead = millis();   // update the lastRead timestamp
+        }
+    }
+    // No need for extra line feed since most responses contain them anyways
+#ifdef DEBUG
+    Serial.println(ATresponse);
+#endif
+    return ATresponse;
+}
+
 void udpSendString(IPAddress udpServer, unsigned int udpServerport, String message) {  //used from loop to send from msgBuffer stack. returns sent bytes or 0 if failed.
     boolean packetSuccess = 0;
     int sentBytes = 0;
+    sendATcommand("AT" , 100); //ping to wake modem if autosleep
+
     udp.beginPacket(udpServer, udpServerport);
     sentBytes = udp.print(message); //udp.print nicely converts string to hex before send
     packetSuccess = udp.endPacket(); //0 = failed. NB: might still be successful if first packet after modem 30s+ idle,
 
     if (packetSuccess == 0) { //packet failed (NB: might still be sent OK if first packet after long idle).
-        Serial.print("Send unsure, bytes:"); Serial.println(sentBytes); //verify on server side if was successful, usually are...
+        Serial.print("Send unsure, bytes:"); Serial.println(sentBytes); //verify on server side if was successful, usually are..
+        //sendUnsureCounter++;
         wait(200); //give modem some time to wake up if was first packet in a while
     } else {
         Serial.print("Send OK, bytes:"); Serial.println(sentBytes);
+        //sendUnsureCounter = 0;
     }
     bytesCounter += sentBytes; //update global byte statistics
     //Serial.print("DEBUG end from udpSendString client.ready:"); Serial.print(client.ready()); Serial.print(", nbaccess.ready:"); Serial.println(nbAccess.ready());
@@ -288,6 +365,5 @@ String readVoltage() {
     //reading = (reading / 1024) * 3.27; //3.28 Convert to actual voltage vs. reference.
     return String(batteryVoltage, 2);
 }
-
 
 

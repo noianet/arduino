@@ -2,25 +2,31 @@
     Board: Arduino MKR 1500 with Ubox SARA R4
 
     Modified Mysensors serial gateway for raw udp over mobile NBIiT/LTE-M.
-    10 slot buffer stack to store incoming data since mobile unreliable/often needs reconnect to network after a few minutes idling.
+    Buffer stack to store incoming data
 
     Note: Only reads mysensors float values. Incoming NRF packets are stored via interrupt in the message stack awaiting transmit loop pickup.
     Listens for 11 minutes, then sleeps 49 (NRF sensor nodes runs at a 10min transmit interval)
 
-    Mostly uses unblocking wait() and smartsleep() from mysensors library which are equal to delay()
+    Mostly uses unblocking wait() and smartsleep() from mysensors library whikle awake which allow for NRF interrupts/store to buffer while idling.
+    Received NRF packets are stored in a FIFO buffer while awake. Then wakes mobile and sends all just before sleep routine . 
+    Sends a xx/14 "1" header to inticate start FIFO buffer, and ends with relay statistics and a xx/14 "0" to indicate end transmission.
+    Modem sleeps as much as possible, only wakes right before sleep, burst send from FIFO, and then put to sleep before microcontroller 49min sleep routine.
 
-    V7.x Rewrite for MKR 1500, removed TelenorIOT library and uses standard udp. New feature sends statistics for total bytes sent since boot with a /nodeID/1/0/27 message.
-    Fast LED flash on NRF packet receive and slow'ish blink once a minute when sleeping to indicate not dead.
+    LED flashes on NRF packet receive while awake, and constant light while modem conect. In 49min sleep routine flashes every 8s to indicate still alive.
+
+    Hardware watchdog routine  resets micro  if code freeze (incl. should caktch some while() connecting loops if faulty modem). 
+    In setup does an ugly hardware reset (to be avoided according to SARA datasheet) but sometimes necessary to fix a hard modem hang.
+
+    Misc notes:
+    V7.x Rewrite for MKR 1500, removed TelenorIOT library and uses standard udp, and removed a lot of string buffers etc. New feature sends statistics for total bytes sent since boot with a /nodeID/1/0/27 message.
 
     NBNB! Always run with a connected battery to avoid brownout crashes.... And seems important to connect battery first, then USB (some stupid battery protection in HW?).
-    Add external battery charger since onboard limited to <0.1A and 4hr max chargetime....Seems like MKR 1500 = overengineered garbage regarding the power supply,
+    Needs external battery charger since onboard limited to <0.1A and 4hr max chargetime....Seems like MKR 1500 = overengineered garbage regarding the power supply,
 
-    Power usage: approx 33mA when awake/listening, peaks to 115mA on transmit, and ca 1mA sleeping.
+    From MKRNB library only uses NBUDP (and therfore MODEM class) since the rest is utter garbage and crashes/locks up the modem..
+    Modem put to graceful network disconect/sleep with AT+CPWROFF, and wake by pulling SARA_PWR_ON low for 1 sec. (pin only signal/does not switch power supply to modem).
 
-    Note, workaround if long term lockups..  https://github.com/arduino-libraries/MKRGSM/issues/66
-
-    Only NBUDP (and therfore MODEM class) used from MKRNB since rest is utter garbage and crashes/locks up  the modem.
-    Using modem powersave instead of switching PWR pin etc. from MKRNB sketches (which crashes the modem often).
+    Power usage: approx 34.5mA(?) when awake/listening, peaks to 115mA on modem wakeup/transmit, and ca 2-3mA sleeping. TODO do another verification after rewrite.
 
 ***********************************************************************/
 #include <MKRNB.h>
@@ -28,8 +34,9 @@
 #include <WDTZero.h> //watchdog frozen (modem hangs) and deepsleep 8s wakeup.
 //#define DEBUG  //enable debug display AT commands.
 
-#define SLEEPLOOPS 351 // ca *8s pr to get roughly 49min sleep, adjusted for clockdrift. Relay_254: 358
+#define SLEEPLOOPS 361 // ca *8s pr to get roughly 49min sleep, adjusted for clockdrift. Relay_254: 361
 #define MY_NODE_ID 254 //<============================= Unique NodeID
+#define BUFFERSIZE 512 //Max struct array size for stored messages pr listen interval. Adjust to safely fit in available RAM
 
 IPAddress serverIP(xxx, xxx, xxx, xxx); //udp server address
 #define REMOTE_PORT 1234   //udp server port
@@ -56,17 +63,18 @@ unsigned long packetsCounter = 0; //total packets sent since boot
 unsigned long bytesCounter = 0; //total bytes sent since boot
 unsigned int packetsLastHourCounter = 0;
 
-//simple messagestack
-String msgBuffer0 = "";
-String msgBuffer1 = "";
-String msgBuffer2 = "";
-String msgBuffer3 = "";
-String msgBuffer4 = "";
-String msgBuffer5 = "";
-String msgBuffer6 = "";
-String msgBuffer7 = "";
-String msgBuffer8 = "";
-String msgBuffer9 = "";
+//Prepare messagestack
+typedef struct { //Based on MySensors protocol
+    byte nodeID;
+    byte sensorID;
+    byte command;
+    //byte ack; Will always be zero so hard coded to 0 in send below to save memory
+    byte type;
+    char payload[20]; //Acording to Mysensors Protocol max payload=25 bytes
+} NRFPacketStruct;
+
+NRFPacketStruct NRFPacket[BUFFERSIZE]; //static reserve amount.
+unsigned int nextFreePointer = 0; //Pointer to next free packet array.
 
 
 void setup() {
@@ -96,107 +104,87 @@ void setup() {
 
     connectModem();  //init the modem. DO NOT USE POWER/RESET PIN FROM ARDUINO EXAMPLES.
 
-    //Add some boot messages to buffer, will be picked up and sent from loop
     readVoltage(); //Force 1 read since first on boot seems to fail/show max. Fix OK.
-    sendMessage(String(MY_NODE_ID)  + "@" + String(MY_NODE_ID) + "/255/3/0/11_NBIoT-MKR1500"); //HW info
-    sendMessage(String(MY_NODE_ID)  + "@" + String(MY_NODE_ID) + "/255/3/0/12_7.0"); //Sketch version
-    sendMessage(String(MY_NODE_ID)  + "@" + String(MY_NODE_ID) + "/255/3/0/14_1"); //Indicate gateway ready
-    sendMessage(String(MY_NODE_ID)  + "@" + String(MY_NODE_ID) + "/255/1/0/38_" + readVoltage());
+    //send directly/bypass buffer to show alive early on boot.
+    udpSendString(serverIP, REMOTE_PORT, String(MY_NODE_ID)  + "@" + String(MY_NODE_ID) + "/255/3/0/11_NBIoT-MKR1500"); //HW info
+    wait(50); //to not overload modem
+    udpSendString(serverIP, REMOTE_PORT, String(MY_NODE_ID)  + "@" + String(MY_NODE_ID) + "/255/3/0/12_7.0"); //Sketch version
+    wait(50); //to not overload modem
+    udpSendString(serverIP, REMOTE_PORT, String(MY_NODE_ID)  + "@" + String(MY_NODE_ID) + "/255/1/0/38_" + readVoltage());
+    wait(1000); //to ensure time for last transmit before airplane mode.
+    sendATcommand("AT+CPWROFF" , 500);
+
+    messageToBuffer(MY_NODE_ID, 255, 1, 14, "1"); //Add to slot 0 in LIFO receive buffer as a header
 
     previousMillis = millis();
 } //==================END setup==================
 
 void loop() {
-    MyWatchDoggy.clear(); //Clear watchdog timer, if not done within max 2min it will reset.
-    //Send from stack if not empty, else smartsleep for a bit. A bit simple mut not much to gain from a loop, and always assume send successful.
-    if (msgBuffer0 != "") {
-        //Serial.println("s0");
-        udpSendString(serverIP, REMOTE_PORT, msgBuffer0);
-        msgBuffer0 = ""; //clear
-    } else if (msgBuffer1 != "") {
-        //Serial.println("s1");
-        udpSendString(serverIP, REMOTE_PORT, msgBuffer1);
-        msgBuffer1 = ""; //clear
-    } else if (msgBuffer2 != "") {
-        //Serial.println("s2");
-        udpSendString(serverIP, REMOTE_PORT, msgBuffer2);
-        msgBuffer2 = ""; //clear
-    } else if (msgBuffer3 != "") {
-        //Serial.println("s3");
-        udpSendString(serverIP, REMOTE_PORT, msgBuffer3);
-        msgBuffer3 = ""; //clear
-    } else if (msgBuffer4 != "") {
-        //Serial.println("s4");
-        udpSendString(serverIP, REMOTE_PORT, msgBuffer4);
-        msgBuffer4 = ""; //clear
-    } else if (msgBuffer5 != "") {
-        //Serial.println("s5");
-        udpSendString(serverIP, REMOTE_PORT, msgBuffer5);
-        msgBuffer5 = ""; //clear
-    } else if (msgBuffer6 != "") {
-        //Serial.println("s6");
-        udpSendString(serverIP, REMOTE_PORT, msgBuffer6);
-        msgBuffer6 = ""; //clear
-    } else if (msgBuffer7 != "") {
-        //Serial.println("s7");
-        udpSendString(serverIP, REMOTE_PORT, msgBuffer7);
-        msgBuffer7 = ""; //clear
-    } else if (msgBuffer8 != "") {
-        //Serial.println("s8");
-        udpSendString(serverIP, REMOTE_PORT, msgBuffer8);
-        msgBuffer8 = ""; //clear
-    } else if (msgBuffer9 != "") {
-        //Serial.println("s9");
-        udpSendString(serverIP, REMOTE_PORT, msgBuffer9);
-        msgBuffer9 = ""; //clear
-    } else {  //buffer empty, smartsleep untill NRF interrupt or max timer
-        smartSleep(2, CHANGE, 1000); //interrupt pin, interrupt type, wait in ms. Wake if nrf get packet.
-    }
+    MyWatchDoggy.clear(); //Clear watchdog timer, if not done within max 2min it will reset
+    smartSleep(2, CHANGE, 1000); //interrupt pin, interrupt type, wait in ms. Wake if nrf get packet.
+
+    //Note. NRF listener adds to buffer, send are done right before sleep
 
     //=============Sleep section================
     if (millis() - previousMillis > 660000) { //run every 11 min, holds in sleep for 49
         //if (millis() - previousMillis > 30000) { //DEBUG SPEEDRUN
-        digitalWrite(MY_RF24_CE_PIN, LOW);  //set NRF to output/low power mode
-        //Serial.println("DEBUG: Entering millis" );
-        //Send statistics and bye messages directly/bypass buffer since we are outside stack handler above.
-        udpSendString(serverIP, REMOTE_PORT, String(MY_NODE_ID)  + "@" + String(MY_NODE_ID) + "/255/1/0/24_" + String(hourCounter));
-        wait(50); //to not overload modem
-        udpSendString(serverIP, REMOTE_PORT, String(MY_NODE_ID)  + "@" + String(MY_NODE_ID) + "/255/1/0/25_" + String(packetsCounter));
-        wait(50); //to not overload modem
-        udpSendString(serverIP, REMOTE_PORT, String(MY_NODE_ID)  + "@" + String(MY_NODE_ID) + "/255/1/0/26_" + String(packetsLastHourCounter));
-        wait(50); //to not overload modem
-        udpSendString(serverIP, REMOTE_PORT, String(MY_NODE_ID)  + "@" + String(MY_NODE_ID) + "/255/1/0/27_" + String(bytesCounter));
-        wait(50); //to not overload modem
-        String currVoltage = readVoltage();
-        udpSendString(serverIP, REMOTE_PORT, String(MY_NODE_ID)  + "@" + String(MY_NODE_ID) + "/255/1/0/38_" + currVoltage);
-        wait(50); //to not overload modem
-        udpSendString(serverIP, REMOTE_PORT, String(MY_NODE_ID)  + "@" + String(MY_NODE_ID) + "/255/3/0/14_0"); //Indicate gateway sleeping
+        Serial.println("DEBUG entering modem connect");
+        digitalWrite(SARA_PWR_ON, LOW); //power pin low 1 sec to wake from powered down state
+        wait(1000);
+        digitalWrite(SARA_PWR_ON, HIGH);
+        wait(1000);
+        //pester modem with a few AT to wake it up, then connect routine.
+        sendATcommand("AT" , 1000); //wake modem by pestering it with some UART TX activity
+        sendATcommand("AT" , 500);
+        sendATcommand("AT" , 500);
+        sendATcommand("AT" , 500);
+        connectModem();
+
+        digitalWrite(MY_RF24_CE_PIN, LOW);  //set NRF to output/low power mode to stop receive.
+
+        //Add some relay statistics as padding end of buffer
+        messageToBuffer(MY_NODE_ID, 255, 1, 24, String(hourCounter));
+        messageToBuffer(MY_NODE_ID, 255, 1, 25, String(packetsCounter));
+        messageToBuffer(MY_NODE_ID, 255, 1, 26, String(packetsLastHourCounter));
+        messageToBuffer(MY_NODE_ID, 255, 1, 38, readVoltage());
+        // messageToBuffer(MY_NODE_ID, 255, 1, 27, String(bytesCounter));  <-- these two sent outside buffer further down.
+        //messageToBuffer(MY_NODE_ID, 255, 1, 14, "0"); //Indicate last packet from stack sequence
+
+        //Send from buffer
+        Serial.println("DEBUG entering modem sendloop");
+        for (int i = 0; i < nextFreePointer; i++) {
+            digitalWrite(MY_RF24_CE_PIN, LOW);  //Force NRF to output/low power mode again (mysensors might wake this)
+            wait(50); //to not overload modem
+            sendFromBuffer(i);
+            MyWatchDoggy.clear(); //Clear watchdog timer, if not done within max 2min or it will reset the cpu.
+        }
+        nextFreePointer = 0; //Reset stack pointer.
+
+        //Since bytes are counted during in transmit each send from buffer, final tally are sendt outside loop/buffer at the end. This one and the end transmission message bytes are addad to the total and reported in the next go-around..
+        udpSendString(serverIP, REMOTE_PORT, String(MY_NODE_ID)  + "@" + String(MY_NODE_ID) + "/255/1/0/27_" + bytesCounter);
+        delay(50);
+        udpSendString(serverIP, REMOTE_PORT, String(MY_NODE_ID)  + "@" + String(MY_NODE_ID) + "/255/1/0/14_0"); //end transmission message
 
         Serial.println("DEBUG entering sleep section");
-        //COMMENT: No command for modem sleep needed since In connectModem() set auto-sleeps if no UART TX.
+        sleep(1000); //Just to ensure final packet are sent before shutting down modem
+        sendATcommand("AT + CPWROFF" , 500);
 
-        MyWatchDoggy.clear(); //Clear watchdog timer, if not done within max 2min or it will reset the cpu.
+        MyWatchDoggy.clear(); //Clear watchdog timer, if not done within max 2min  it will reset the cpu.
         for (int i = 0; i < SLEEPLOOPS; i++) {  //Sleep Loop, 8s ca each.
             digitalWrite(MY_RF24_CE_PIN, LOW);  //DEBUG: force NRF to output/low power mode. Fighting MySensors blobs.
             LowPower.deepSleep();  //wake every 8s by watchdog timer
-            //delay(8000);
-            MyWatchDoggy.clear(); //Clear watchdog timer, if not done within max 2min or it will reset the cpu.
+            //delay(8000); Serial.print("z");
+            MyWatchDoggy.clear(); //Clear watchdog timer, if not done within max 2min  it will reset the cpu.
             digitalWrite(LED_BUILTIN, HIGH); //flash to tell still alive
             wait(50);
-            //Serial.print("z");
             digitalWrite(LED_BUILTIN, LOW);
         }
         Serial.println();
-        Serial.println("End sleep section,");
-        //_________wake up radios_________
-        //wake modem by pestering it with some UART TX activity
-        sendATcommand("AT" , 1000);
-        sendATcommand("AT" , 1000);
-        sendATcommand("AT" , 1000);
+        Serial.println("End sleep section, ");
 
-        digitalWrite(MY_RF24_CE_PIN, HIGH); //enable NRF radio
+        messageToBuffer(MY_NODE_ID, 255, 1, 14, "1"); //Add to slot 0 in FIFO receive buffer as a header
+        digitalWrite(MY_RF24_CE_PIN, HIGH); //enable NRF radio and start listening/filling buffer.
 
-        sendMessage(String(MY_NODE_ID)  + "@" + String(MY_NODE_ID) + "/255/3/0/14_1"); //Indicate gateway ready
         hourCounter++;
         packetsLastHourCounter = 0;
         previousMillis = millis();
@@ -204,6 +192,83 @@ void loop() {
 } //=============END loop=================
 
 //===============functions below=========================
+void receive(const MyMessage &message)  {//Kicked off by mysensors lib by interrupt apparently. Unpacks to packet array and forwards to sendMessage() function
+    messageToBuffer(message.sender, message.sensor, message.getCommand(), message.type, String(message.getFloat()).c_str());
+    //ack ignored since only support 0
+} //END mysensors message receive events handler
+
+void messageToBuffer(byte nodeID, byte sensorID, byte command, byte type, String payload) { //char payload[20]) {  //add message to stack and move pointer
+    if (nextFreePointer < BUFFERSIZE) { //keep one extra to not "overhang" buffer with the pointer, just in case
+        NRFPacket[nextFreePointer].nodeID = nodeID;
+        NRFPacket[nextFreePointer].sensorID = sensorID;
+        NRFPacket[nextFreePointer].command = command;
+        //byte ack; Always zero so hard coded below
+        NRFPacket[nextFreePointer].type = type;
+        //strcpy(NRFPacket[nextFreePointer].payload, payload);  //copy char array input
+        payload.toCharArray(NRFPacket[nextFreePointer].payload, 20); //copy char array input
+
+        nextFreePointer++;
+        Serial.print("Message added to stack, pointer moved to: ");
+        Serial.println(nextFreePointer);
+    } else { //buffer full and silently drop packet
+        Serial.print("Buffer full, stackPointer: ");
+        Serial.println(nextFreePointer);
+    }
+
+    //flash led to indicate receive
+    digitalWrite(LED_BUILTIN, HIGH);
+    wait(30);
+    digitalWrite(LED_BUILTIN, LOW);
+
+    packetsCounter++;  //Always add here to indicate if more than buffer allows
+    packetsLastHourCounter++;
+}
+
+boolean sendFromBuffer(unsigned int bufferID) {  //format message string from buffer entry and send via mobile
+    //construct message string: Based on MySensors protocol with nodeID@ prefix to allow for separation at receiver.
+    String   message = String(MY_NODE_ID);
+    message += "@";
+    message += NRFPacket[bufferID].nodeID;
+    message += "/";
+    message += NRFPacket[bufferID].sensorID;
+    message += "/";
+    message += NRFPacket[bufferID].command;
+    message += "/0/"; // ack from MySensors protocol; Will always zero so hard coded here.
+    message += NRFPacket[bufferID].type;
+    message += "_";
+    message += NRFPacket[bufferID].payload;
+    //Serial.print("DEBUG CONSTRUCT TO SEND: ");
+    //Serial.println(message);
+
+    udpSendString(serverIP, REMOTE_PORT, message);
+
+    //reset current buffer slot as a security step.
+    NRFPacket[bufferID].nodeID = 0;
+    NRFPacket[bufferID].sensorID = 0;
+    NRFPacket[bufferID].command = 0;
+    NRFPacket[bufferID].type = 0;
+    NRFPacket[bufferID].payload[0] = '/0';
+}  //END sendFromBuffer()
+
+void udpSendString(IPAddress udpServer, unsigned int udpServerport, String message) {  //used from loop to send from msgBuffer stack. returns sent bytes or 0 if failed.
+    boolean packetSuccess = 0;
+    int sentBytes = 0;
+
+    udp.beginPacket(udpServer, udpServerport);
+    sentBytes = udp.print(message); //udp.print nicely converts string to hex before send
+    packetSuccess = udp.endPacket(); //0 = failed. NB: might still be successful if first packet after modem 30s+ idle,
+
+    if (packetSuccess == 0) { //packet failed (NB: might still be sent OK if first packet after long idle).
+        Serial.print("Send unsure, bytes: "); Serial.println(sentBytes); //verify on server side if was successful, usually are..
+        //sendUnsureCounter++;
+        wait(200); //give modem some time to wake up if was first packet in a while
+    } else {
+        Serial.print("Send OK, bytes: "); Serial.println(sentBytes);
+        //sendUnsureCounter = 0;
+    }
+    bytesCounter += sentBytes; //update global byte statistics
+}
+
 void connectModem() {
     //reset all deadman switches
     MyWatchDoggy.clear();
@@ -211,14 +276,12 @@ void connectModem() {
 
     sendATcommand("AT" , 1000); //wake modem
     //Serial.println("Ensure radio disabled");
-    sendATcommand("AT+COPS=2" , 500);  //ensure deregistered from network
-    sendATcommand("AT+IPR=115200", 500); //lock UART to 115200 baud
-    sendATcommand("AT+UPSV=4" , 500);  //autosleep power saving based on UART TX line activity
-    //sendATcommand("AT+CPSMS=1,,,\"11111111\",\"00000000\"" , 500);  //"Never" wake to check for downstream data.
-    //sendATcommand("AT+CPSMS=1,,,\"01100000\",\"00000000\"" , 500);  //Slow down wake to check for downstream data.
-    sendATcommand("AT+CPSMS=0,,,\"00000000\",\"00000000\"" , 500);  //Seems like disabled is only way to avoid crashes.
-    sendATcommand("AT+CFUN=15" , 500); //silent reset  (with detach from network and saving of NVM parameters),
-    Serial.println("Enable radio and check signal, CSQ must be below 99.99");
+    /*   sendATcommand("AT + COPS = 2" , 500);  //ensure deregistered from network
+            sendATcommand("AT + IPR = 115200", 500); //lock UART to 115200 baud
+                    sendATcommand("AT + UPSV = 4" , 500);  //autosleep power saving based on UART TX line activity
+                            sendATcommand("AT + CPSMS = 0, , , \"00000000\",\"00000000\"" , 500); //Disabling network sleep since using airplane mode during hibernate instead.
+        sendATcommand("AT+CFUN=15" , 500); //silent reset  (with detach from network and saving of NVM parameters),*/
+    Serial.println("Enable mobile and check signal, CSQ must be below 99.99");
     sendATcommand("AT+CFUN=1" , 500); // sets the MT to full functionality
     sendATcommand("AT+CSQ" , 2000);  //check signal strength a few times to nag modem/ensure radio is awake.
     sendATcommand("AT+CSQ" , 2000);
@@ -243,8 +306,8 @@ void connectModem() {
             delay(2000);
         }
     }
-    Serial.print("Connected, assigned PSM values:");
-    Serial.println(sendATcommand("AT+UCPSMS?" , 500));  //prints assigned PSM valuwes from netwiork
+    //    Serial.print("Connected, assigned PSM values:");
+    //    Serial.println(sendATcommand("AT+UCPSMS?" , 500));  //prints assigned PSM valuwes from netwiork
 
     MyWatchDoggy.clear();
     Serial.println("Activate and test GPRS ");
@@ -260,7 +323,7 @@ void connectModem() {
         }
     }
     MyWatchDoggy.clear();
-    Serial.println("Open UDP socket");  
+    Serial.println("Open UDP socket");
     udp.begin(5000); //this part uses sandard MKNRB lib since has some convenient string conversion stuff.
     digitalWrite(LED_BUILTIN, LOW); //turn off to indicate modem OK
     Serial.println("Modem connected");
@@ -283,79 +346,6 @@ String sendATcommand(String command, unsigned long timeout) {
 #endif
     return ATresponse;
 }
-
-void udpSendString(IPAddress udpServer, unsigned int udpServerport, String message) {  //used from loop to send from msgBuffer stack. returns sent bytes or 0 if failed.
-    boolean packetSuccess = 0;
-    int sentBytes = 0;
-    sendATcommand("AT" , 100); //ping to wake modem if autosleep
-
-    udp.beginPacket(udpServer, udpServerport);
-    sentBytes = udp.print(message); //udp.print nicely converts string to hex before send
-    packetSuccess = udp.endPacket(); //0 = failed. NB: might still be successful if first packet after modem 30s+ idle,
-
-    if (packetSuccess == 0) { //packet failed (NB: might still be sent OK if first packet after long idle).
-        Serial.print("Send unsure, bytes:"); Serial.println(sentBytes); //verify on server side if was successful, usually are..
-        //sendUnsureCounter++;
-        wait(200); //give modem some time to wake up if was first packet in a while
-    } else {
-        Serial.print("Send OK, bytes:"); Serial.println(sentBytes);
-        //sendUnsureCounter = 0;
-    }
-    bytesCounter += sentBytes; //update global byte statistics
-    //Serial.print("DEBUG end from udpSendString client.ready:"); Serial.print(client.ready()); Serial.print(", nbaccess.ready:"); Serial.println(nbAccess.ready());
-} //END udpSendString
-
-void receive(const MyMessage & message)  { //Kicked off by mysensors lib by interrupt. Unpacks and builds message string and forwards to sendMessage() function
-    String msgValue = String(message.getFloat());
-    //  if (!msgValue) {msgValue=String(message.getLong());}
-
-    String messageConstruct = String(MY_NODE_ID)  + "@" + String(message.sender) + "/" + String(message.sensor) +  "/" + String(message.getCommand()) +  "/" + String(message.isAck()) +  "/" + String(message.type) +  "_" + msgValue;
-    //Serial.println("messageConstruct: " + messageConstruct);
-    packetsCounter++;
-    packetsLastHourCounter++;
-    sendMessage(messageConstruct);
-    //flash led to indicate receive
-    digitalWrite(LED_BUILTIN, HIGH);
-    wait(30);
-    digitalWrite(LED_BUILTIN, LOW);
-} //END mysensors message receive events handler
-
-void sendMessage(String payload) { //only adds to send buffer, sending from stack are done in loop.
-    if (msgBuffer0 == "") {
-        //Serial.println("a0");
-        msgBuffer0 = payload;
-    } else if (msgBuffer1 == "") {
-        //Serial.println("a1");
-        msgBuffer1 = payload;
-    }  else if (msgBuffer2 == "") {
-        //Serial.println("a2");
-        msgBuffer2 = payload;
-    }  else if (msgBuffer3 == "") {
-        //Serial.println("a3");
-        msgBuffer3 = payload;
-    }  else if (msgBuffer4 == "") {
-        //Serial.println("a4");
-        msgBuffer4 = payload;
-    }  else if (msgBuffer5 == "") {
-        //Serial.println("a5");
-        msgBuffer5 = payload;
-    }  else if (msgBuffer6 == "") {
-        //Serial.println("a6");
-        msgBuffer6 = payload;
-    }  else if (msgBuffer7 == "") {
-        //Serial.println("a7");
-        msgBuffer7 = payload;
-    }  else if (msgBuffer8 == "") {
-        //Serial.println("a8");
-        msgBuffer8 = payload;
-    }  else if (msgBuffer9 == "") {
-        //Serial.println("a9");
-        msgBuffer9 = payload;
-    } else {
-        Serial.println("DEBUG ALERT BUFFER FULL");
-        wait(1); //symbolic wait to remember the packet that was lost to time.
-    }
-} //END sendMessage
 
 String readVoltage() {
     int adcReading = analogRead(ADC_BATTERY);

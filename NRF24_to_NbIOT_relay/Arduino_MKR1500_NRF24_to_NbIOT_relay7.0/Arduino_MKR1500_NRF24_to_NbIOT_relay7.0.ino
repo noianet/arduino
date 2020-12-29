@@ -8,13 +8,13 @@
     Listens for 11 minutes, then sleeps 49 (NRF sensor nodes runs at a 10min transmit interval)
 
     Mostly uses unblocking wait() and smartsleep() from mysensors library whikle awake which allow for NRF interrupts/store to buffer while idling.
-    Received NRF packets are stored in a FIFO buffer while awake. Then wakes mobile and sends all just before sleep routine . 
+    Received NRF packets are stored in a FIFO buffer while awake. Then wakes mobile and sends all just before sleep routine .
     Sends a xx/14 "1" header to inticate start FIFO buffer, and ends with relay statistics and a xx/14 "0" to indicate end transmission.
     Modem sleeps as much as possible, only wakes right before sleep, burst send from FIFO, and then put to sleep before microcontroller 49min sleep routine.
 
     LED flashes on NRF packet receive while awake, and constant light while modem conect. In 49min sleep routine flashes every 8s to indicate still alive.
 
-    Hardware watchdog routine  resets micro  if code freeze (incl. should caktch some while() connecting loops if faulty modem). 
+    Hardware watchdog routine  resets micro  if code freeze (incl. should caktch some while() connecting loops if faulty modem).
     In setup does an ugly hardware reset (to be avoided according to SARA datasheet) but sometimes necessary to fix a hard modem hang.
 
     Misc notes:
@@ -26,13 +26,16 @@
     From MKRNB library only uses NBUDP (and therfore MODEM class) since the rest is utter garbage and crashes/locks up the modem..
     Modem put to graceful network disconect/sleep with AT+CPWROFF, and wake by pulling SARA_PWR_ON low for 1 sec. (pin only signal/does not switch power supply to modem).
 
-    Power usage: approx 34.5mA(?) when awake/listening, peaks to 115mA on modem wakeup/transmit, and ca 2-3mA sleeping. TODO do another verification after rewrite.
+    Power usage: approx 32.0mA(?) when awake/listening, peaks to 115mA on modem wakeup/transmit, and ca 2.8mA sleeping. .
+
 
 ***********************************************************************/
 #include <MKRNB.h>
 #include <ArduinoLowPower.h>
-#include <WDTZero.h> //watchdog frozen (modem hangs) and deepsleep 8s wakeup.
-//#define DEBUG  //enable debug display AT commands.
+#include <WDTZero.h> //watchdog (reset if modem hangs etc) and will force LowPower deepsleep to wake after 8s .
+
+//#define DEBUG  //enable USB serial debug (othervisw disables USB to save power).
+//#define ATDEBUG  //enable debug display AT commands. Must enable DEBUG as well for this
 
 #define SLEEPLOOPS 361 // ca *8s pr to get roughly 49min sleep, adjusted for clockdrift. Relay_254: 361
 #define MY_NODE_ID 254 //<============================= Unique NodeID
@@ -76,8 +79,20 @@ typedef struct { //Based on MySensors protocol
 NRFPacketStruct NRFPacket[BUFFERSIZE]; //static reserve amount.
 unsigned int nextFreePointer = 0; //Pointer to next free packet array.
 
-
 void setup() {
+#if !defined(DEBUG)
+    USBDevice.detach(); // detach USB . Saves 0.5mA. NBNBNB: Comment out for serial debug
+#endif
+
+    //Set digital pins to input  to save on current drain. Saves 0.1mA
+    for (int i = 3; i < 7; i++) { //pins 0-2 used by NRF CE, CS, IRQ
+        pinMode(i, INPUT);
+    }
+    for (int i = 11; i < 15; i++) { //pins 8-10 used by NRF MISO; MOSI; SCK
+        pinMode(i, INPUT);
+    }
+
+    pinMode(LED_BUILTIN, OUTPUT);
     digitalWrite(LED_BUILTIN, HIGH); //blink to tell alive
     wait(100);
     digitalWrite(LED_BUILTIN, LOW);
@@ -121,18 +136,18 @@ void setup() {
 
 void loop() {
     MyWatchDoggy.clear(); //Clear watchdog timer, if not done within max 2min it will reset
-    smartSleep(2, CHANGE, 1000); //interrupt pin, interrupt type, wait in ms. Wake if nrf get packet.
+    LowPower.idle(1000); //waits for NRF interrupt or timeout
 
-    //Note. NRF listener adds to buffer, send are done right before sleep
+    //Note. NRF interrupt listener adds to buffer, send are done in a single burst right before sleep
 
     //=============Sleep section================
-    if (millis() - previousMillis > 660000) { //run every 11 min, holds in sleep for 49
-        //if (millis() - previousMillis > 30000) { //DEBUG SPEEDRUN
+   if (millis() - previousMillis > 660000) { //run every 11 min, holds in sleep for 49
+     //if (millis() - previousMillis > 30000) { //DEBUG SPEEDRUN
         Serial.println("DEBUG entering modem connect");
         digitalWrite(SARA_PWR_ON, LOW); //power pin low 1 sec to wake from powered down state
-        wait(1000);
+        LowPower.idle(1000);
         digitalWrite(SARA_PWR_ON, HIGH);
-        wait(1000);
+        LowPower.idle(1000);
         //pester modem with a few AT to wake it up, then connect routine.
         sendATcommand("AT" , 1000); //wake modem by pestering it with some UART TX activity
         sendATcommand("AT" , 500);
@@ -154,7 +169,7 @@ void loop() {
         Serial.println("DEBUG entering modem sendloop");
         for (int i = 0; i < nextFreePointer; i++) {
             digitalWrite(MY_RF24_CE_PIN, LOW);  //Force NRF to output/low power mode again (mysensors might wake this)
-            wait(50); //to not overload modem
+            delay(50); //to not overload modem
             sendFromBuffer(i);
             MyWatchDoggy.clear(); //Clear watchdog timer, if not done within max 2min or it will reset the cpu.
         }
@@ -166,17 +181,17 @@ void loop() {
         udpSendString(serverIP, REMOTE_PORT, String(MY_NODE_ID)  + "@" + String(MY_NODE_ID) + "/255/1/0/14_0"); //end transmission message
 
         Serial.println("DEBUG entering sleep section");
-        sleep(1000); //Just to ensure final packet are sent before shutting down modem
+        LowPower.idle(1000); //Just to ensure final packet are sent before shutting down modem
         sendATcommand("AT + CPWROFF" , 500);
 
         MyWatchDoggy.clear(); //Clear watchdog timer, if not done within max 2min  it will reset the cpu.
         for (int i = 0; i < SLEEPLOOPS; i++) {  //Sleep Loop, 8s ca each.
             digitalWrite(MY_RF24_CE_PIN, LOW);  //DEBUG: force NRF to output/low power mode. Fighting MySensors blobs.
-            LowPower.deepSleep();  //wake every 8s by watchdog timer
+            LowPower.deepSleep();  //will wake every 8s by watchdog timer set by WDTZero.
             //delay(8000); Serial.print("z");
             MyWatchDoggy.clear(); //Clear watchdog timer, if not done within max 2min  it will reset the cpu.
             digitalWrite(LED_BUILTIN, HIGH); //flash to tell still alive
-            wait(50);
+            delay(50); //do not use from LowPower here since disturbs 8s RTC timer.
             digitalWrite(LED_BUILTIN, LOW);
         }
         Serial.println();
@@ -189,22 +204,23 @@ void loop() {
         packetsLastHourCounter = 0;
         previousMillis = millis();
     }
+
 } //=============END loop=================
 
 //===============functions below=========================
+
 void receive(const MyMessage &message)  {//Kicked off by mysensors lib by interrupt apparently. Unpacks to packet array and forwards to sendMessage() function
     messageToBuffer(message.sender, message.sensor, message.getCommand(), message.type, String(message.getFloat()).c_str());
     //ack ignored since only support 0
 } //END mysensors message receive events handler
 
 void messageToBuffer(byte nodeID, byte sensorID, byte command, byte type, String payload) { //char payload[20]) {  //add message to stack and move pointer
-    if (nextFreePointer < BUFFERSIZE) { //keep one extra to not "overhang" buffer with the pointer, just in case
+    if (nextFreePointer < BUFFERSIZE) { //only smaller than to keep one extra to not "overhang" buffer with the pointer, just in case
         NRFPacket[nextFreePointer].nodeID = nodeID;
         NRFPacket[nextFreePointer].sensorID = sensorID;
         NRFPacket[nextFreePointer].command = command;
-        //byte ack; Always zero so hard coded below
+        //byte ack in MySensors protocol; Always zero here so hard coded in message reconstruct before mobile send
         NRFPacket[nextFreePointer].type = type;
-        //strcpy(NRFPacket[nextFreePointer].payload, payload);  //copy char array input
         payload.toCharArray(NRFPacket[nextFreePointer].payload, 20); //copy char array input
 
         nextFreePointer++;
@@ -276,10 +292,10 @@ void connectModem() {
 
     sendATcommand("AT" , 1000); //wake modem
     //Serial.println("Ensure radio disabled");
-    /*   sendATcommand("AT + COPS = 2" , 500);  //ensure deregistered from network
-            sendATcommand("AT + IPR = 115200", 500); //lock UART to 115200 baud
-                    sendATcommand("AT + UPSV = 4" , 500);  //autosleep power saving based on UART TX line activity
-                            sendATcommand("AT + CPSMS = 0, , , \"00000000\",\"00000000\"" , 500); //Disabling network sleep since using airplane mode during hibernate instead.
+    /*  sendATcommand("AT + COPS = 2" , 500);  //ensure deregistered from network
+        sendATcommand("AT + IPR = 115200", 500); //lock UART to 115200 baud
+        sendATcommand("AT + UPSV = 4" , 500);  //autosleep power saving based on UART TX line activity
+        sendATcommand("AT + CPSMS = 0, , , \"00000000\",\"00000000\"" , 500); //Disabling network sleep since using airplane mode during hibernate instead.
         sendATcommand("AT+CFUN=15" , 500); //silent reset  (with detach from network and saving of NVM parameters),*/
     Serial.println("Enable mobile and check signal, CSQ must be below 99.99");
     sendATcommand("AT+CFUN=1" , 500); // sets the MT to full functionality
@@ -289,7 +305,7 @@ void connectModem() {
     sendATcommand("AT+CSQ" , 2000);
     sendATcommand("AT+CMGF=1" , 500); //message format to text mode
     sendATcommand("AT+UDCONF=1,1" , 500); // HEX mode enabled
-    /*    Serial.println("Set operator/apn");
+    /*  Serial.println("Set operator/apn");
         sendATcommand("AT+COPS=1,2,\"24201\"" , 500);
         sendATcommand("AT+CGDCONT=1,\"IP\",\"mdatks\"" , 500);  //set APN
         sendATcommand("AT+UAUTHREQ=1,0" , 500); //Configures the authentication parameters of a defined PDP/EPS bearer
@@ -303,7 +319,7 @@ void connectModem() {
             break;
         } else {
             Serial.println("Still connecting, status:" + ATresult);
-            delay(2000);
+            wait(2000);
         }
     }
     //    Serial.print("Connected, assigned PSM values:");
@@ -313,13 +329,13 @@ void connectModem() {
     Serial.println("Activate and test GPRS ");
     sendATcommand("AT+CGATT=1" , 500);
     while (true) {
-        String ATresult = String(sendATcommand("AT+CGACT?" , 500).substring(12, 21)); //CGATT
+        String ATresult = String(sendATcommand("AT+CGACT?" , 500).substring(12, 21)); 
         if (ATresult == "+CGACT: 1") {
             Serial.println("Success, status:" + ATresult);
             break;
         } else {
             Serial.println("GPRS error, status:" + ATresult);
-            delay(2000);
+            wait(2000);
         }
     }
     MyWatchDoggy.clear();
@@ -341,7 +357,7 @@ String sendATcommand(String command, unsigned long timeout) {
         }
     }
     // No need for extra line feed since most responses contain them anyways
-#ifdef DEBUG
+#ifdef ATDEBUG
     Serial.println(ATresponse);
 #endif
     return ATresponse;

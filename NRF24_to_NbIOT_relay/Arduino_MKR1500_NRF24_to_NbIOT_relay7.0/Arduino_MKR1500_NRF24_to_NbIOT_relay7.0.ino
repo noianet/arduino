@@ -26,8 +26,7 @@
     From MKRNB library only uses NBUDP (and therfore MODEM class) since the rest is utter garbage and crashes/locks up the modem..
     Modem put to graceful network disconect/sleep with AT+CPWROFF, and wake by pulling SARA_PWR_ON low for 1 sec. (pin only signal/does not switch power supply to modem).
 
-    Power usage: approx 32.0mA(?) when awake/listening, peaks to 115mA on modem wakeup/transmit, and ca 2.8mA sleeping. .
-
+    Power usage: approx 32.0mA when awake/listening, peaks to 115mA on modem wakeup/transmit, and ca 2.8mA sleeping. 
 
 ***********************************************************************/
 #include <MKRNB.h>
@@ -58,7 +57,7 @@ IPAddress serverIP(xxx, xxx, xxx, xxx); //udp server address
 NBUDP udp;
 
 byte wdtCounter, wdtCounterReset;
-WDTZero MyWatchDoggy; //generates a reset if software loop does not clear WDT on time (generally modem issues).
+WDTZero MyWatchDoggy; 
 
 unsigned long previousMillis; //used for sleep trigger
 unsigned int hourCounter = 0;  //total hours since boot
@@ -99,7 +98,7 @@ void setup() {
 
     pinMode(SARA_PWR_ON, OUTPUT);
     digitalWrite(SARA_PWR_ON, HIGH);
-    // reset the SerialSARA module <- THIS IS NOT IDEAL.. But sometimes only option to get an unresponsive modem back (watchdog should reset).
+    // reset the SerialSARA module <- THIS IS NOT IDEAL but sometimes only option to get an unresponsive modem back (watchdog should reset CPU if modem hang).
     pinMode(SARA_RESETN, OUTPUT);
     digitalWrite(SARA_RESETN, HIGH);
     delay(100);
@@ -117,7 +116,7 @@ void setup() {
     MODEM.begin(115200);  //modem class from MKRNB, there for NBUDP.
     while (!SerialSARA);
 
-    connectModem();  //init the modem. DO NOT USE POWER/RESET PIN FROM ARDUINO EXAMPLES.
+    connectModem();  //init the modem. 
 
     readVoltage(); //Force 1 read since first on boot seems to fail/show max. Fix OK.
     //send directly/bypass buffer to show alive early on boot.
@@ -126,8 +125,8 @@ void setup() {
     udpSendString(serverIP, REMOTE_PORT, String(MY_NODE_ID)  + "@" + String(MY_NODE_ID) + "/255/3/0/12_7.0"); //Sketch version
     wait(50); //to not overload modem
     udpSendString(serverIP, REMOTE_PORT, String(MY_NODE_ID)  + "@" + String(MY_NODE_ID) + "/255/1/0/38_" + readVoltage());
-    wait(1000); //to ensure time for last transmit before airplane mode.
-    sendATcommand("AT+CPWROFF" , 500);
+    wait(1000); //to ensure time for last transmit before shutting down modem
+    sendATcommand("AT+CPWROFF" , 500); //modem shutdown
 
     messageToBuffer(MY_NODE_ID, 255, 1, 14, "1"); //Add to slot 0 in LIFO receive buffer as a header
 
@@ -168,7 +167,7 @@ void loop() {
         //Send from buffer
         Serial.println("DEBUG entering modem sendloop");
         for (int i = 0; i < nextFreePointer; i++) {
-            digitalWrite(MY_RF24_CE_PIN, LOW);  //Force NRF to output/low power mode again (mysensors might wake this)
+            digitalWrite(MY_RF24_CE_PIN, LOW);  //Keep forcing NRF to output/low power mode (mysensors blob sometimes overrides this)
             delay(50); //to not overload modem
             sendFromBuffer(i);
             MyWatchDoggy.clear(); //Clear watchdog timer, if not done within max 2min or it will reset the cpu.
@@ -182,11 +181,12 @@ void loop() {
 
         Serial.println("DEBUG entering sleep section");
         LowPower.idle(1000); //Just to ensure final packet are sent before shutting down modem
-        sendATcommand("AT + CPWROFF" , 500);
-
+        sendATcommand("AT + CPWROFF" , 500); //modem shutdown
+        
         MyWatchDoggy.clear(); //Clear watchdog timer, if not done within max 2min  it will reset the cpu.
+        
         for (int i = 0; i < SLEEPLOOPS; i++) {  //Sleep Loop, 8s ca each.
-            digitalWrite(MY_RF24_CE_PIN, LOW);  //DEBUG: force NRF to output/low power mode. Fighting MySensors blobs.
+            digitalWrite(MY_RF24_CE_PIN, LOW);  //Keep forcing NRF to output/low power mode, mysensors blob sometimes overrides this.
             LowPower.deepSleep();  //will wake every 8s by watchdog timer set by WDTZero.
             //delay(8000); Serial.print("z");
             MyWatchDoggy.clear(); //Clear watchdog timer, if not done within max 2min  it will reset the cpu.
@@ -209,13 +209,13 @@ void loop() {
 
 //===============functions below=========================
 
-void receive(const MyMessage &message)  {//Kicked off by mysensors lib by interrupt apparently. Unpacks to packet array and forwards to sendMessage() function
+void receive(const MyMessage &message)  {//Kicked off by mysensors lib by interrupt. Extracts from mysensors and forwards to messageToBuffer() which puts mesasge in FIFO stack.
     messageToBuffer(message.sender, message.sensor, message.getCommand(), message.type, String(message.getFloat()).c_str());
-    //ack ignored since only support 0
+    //note: ack from mysensors protocol ignored since only support 0 which are hardcoded later in send
 } //END mysensors message receive events handler
 
 void messageToBuffer(byte nodeID, byte sensorID, byte command, byte type, String payload) { //char payload[20]) {  //add message to stack and move pointer
-    if (nextFreePointer < BUFFERSIZE) { //only smaller than to keep one extra to not "overhang" buffer with the pointer, just in case
+    if (nextFreePointer < BUFFERSIZE) { 
         NRFPacket[nextFreePointer].nodeID = nodeID;
         NRFPacket[nextFreePointer].sensorID = sensorID;
         NRFPacket[nextFreePointer].command = command;
@@ -240,7 +240,7 @@ void messageToBuffer(byte nodeID, byte sensorID, byte command, byte type, String
     packetsLastHourCounter++;
 }
 
-boolean sendFromBuffer(unsigned int bufferID) {  //format message string from buffer entry and send via mobile
+boolean sendFromBuffer(unsigned int bufferID) {  //format message string from buffer row and kick off send via mobile by udpSendString() function, then clear.
     //construct message string: Based on MySensors protocol with nodeID@ prefix to allow for separation at receiver.
     String   message = String(MY_NODE_ID);
     message += "@";
@@ -286,7 +286,6 @@ void udpSendString(IPAddress udpServer, unsigned int udpServerport, String messa
 }
 
 void connectModem() {
-    //reset all deadman switches
     MyWatchDoggy.clear();
     digitalWrite(LED_BUILTIN, HIGH); //turn on to indicate modem connecting
 
@@ -356,7 +355,6 @@ String sendATcommand(String command, unsigned long timeout) {
             lastRead = millis();   // update the lastRead timestamp
         }
     }
-    // No need for extra line feed since most responses contain them anyways
 #ifdef ATDEBUG
     Serial.println(ATresponse);
 #endif
@@ -371,5 +369,4 @@ String readVoltage() {
     //reading = (reading / 1024) * 3.27; //3.28 Convert to actual voltage vs. reference.
     return String(batteryVoltage, 2);
 }
-
 

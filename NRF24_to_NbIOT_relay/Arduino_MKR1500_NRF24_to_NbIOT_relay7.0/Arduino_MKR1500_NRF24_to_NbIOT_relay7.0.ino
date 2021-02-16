@@ -34,11 +34,11 @@
 
 //#define DEBUG  //enable USB serial debug (if not defined disables USB to save power).
 
-#define SLEEPLOOPS 330 //361 //60 //180 //361 // ca *8s pr to get roughly 49min sleep, adjusted for clockdrift. Relay_254: 361
+#define SLEEPLOOPS 330 //ca *8s pr to get roughly 49min sleep, adjusted for clockdrift. Relay_254: 361
 #define MY_NODE_ID 254 //<============================= Unique NodeID
 #define BUFFERSIZE 256 //512 //Max struct array size for stored messages pr listen interval. Adjust to safely fit in available RAM
 
-IPAddress serverIP(173, 249, 2, 55); //udp server address
+IPAddress serverIP(xxx, xxx, xxx, xxx); //udp server address
 #define REMOTE_PORT 1234   //udp server port
 
 #define MY_DEBUG // Enable debug prints to serial monitor

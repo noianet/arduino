@@ -20,7 +20,7 @@
 
     Changes v6.3 mostly server-side. New dest. IP and APN to telenor.iot. Also adding MY_NODE_ID@ as a prefix for all packets  ...
     which breaks with general mysensors protocol but allows for separation server side.
-    Change v6.4 dropped smartslleep for sleep (no need for announce), and reporting onboard power sensor. NB calibrate serverside, huge differences between chips.
+    Change v6.4 dropped smartslleep for sleep (no need for announce), and reporting MCU temp sensor. NB calibrate serverside, huge differences between chips.
 ***********************************************************************/
 #include <avr/sleep.h>
 #include <avr/power.h>
